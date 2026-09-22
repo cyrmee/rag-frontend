@@ -1,30 +1,28 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, Instrument_Sans } from "next/font/google";
+import { Inter } from "next/font/google";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/toast";
 import "./globals.css";
 
-const spaceGrotesk = Space_Grotesk({
-  variable: "--font-display",
-  subsets: ["latin"],
-});
-
-const instrumentSans = Instrument_Sans({
+const inter = Inter({
   variable: "--font-sans",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "Anbabi — Retrieval Chat",
+  title: "Fayda Anbabi",
   description:
-    "Anbabi (Amharic: reader) is a retrieval-augmented chat interface — upload documents, then ask questions answered only from that stored content.",
+    "Fayda Anbabi (Amharic: reader) — upload your documents, then ask questions answered from what you've uploaded.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="en"
-      className={`${spaceGrotesk.variable} ${instrumentSans.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en" className={`${inter.variable} h-full antialiased`}>
+      <body className="flex min-h-full flex-col">
+        <Toaster>
+          <TooltipProvider>{children}</TooltipProvider>
+        </Toaster>
+      </body>
     </html>
   );
 }

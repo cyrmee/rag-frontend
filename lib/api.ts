@@ -88,26 +88,24 @@ export type AskStreamHandlers = {
   onAnswer?: (token: string) => void;
   onToolCall?: (name: string, args: unknown) => void;
   onToolResult?: (name: string, preview: string) => void;
-  onDone?: (sources: AskSource[]) => void;
+  onDone?: (sources: AskSource[], conversationId: string | undefined) => void;
   onError?: (message: string) => void;
 };
 
 export async function streamAsk(
   question: string,
-  options: { agentic?: boolean; maxIterations?: number },
+  conversationId: string | undefined,
   handlers: AskStreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
-  const path = options.agentic ? "/ask/agentic/stream" : "/ask/stream";
-  const url = new URL(path, API_BASE);
-  if (options.agentic && options.maxIterations) {
-    url.searchParams.set("max_iterations", String(options.maxIterations));
-  }
+  const url = new URL("/ask", API_BASE);
 
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(
+      conversationId ? { question, conversation_id: conversationId } : { question }
+    ),
     signal,
   });
 
@@ -157,7 +155,10 @@ export async function streamAsk(
         handlers.onDone?.(
           Array.isArray(payload.sources)
             ? payload.sources.map(normalizeSource)
-            : []
+            : [],
+          typeof payload.conversation_id === "string"
+            ? payload.conversation_id
+            : undefined
         );
         break;
       case "error":
@@ -183,6 +184,44 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
     body: formData,
   });
   return handleResponse<UploadResponse>(res);
+}
+
+// Uses XHR instead of fetch so we can report upload-body progress; once the
+// body finishes sending, `onProgress` stops firing while the server chunks
+// and embeds the file — callers should treat "stuck at 100%" as processing.
+export function uploadDocumentWithProgress(
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<UploadResponse> {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", new URL("/upload", API_BASE).toString());
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as UploadResponse);
+        } catch {
+          reject(new Error("The server returned an unreadable response."));
+        }
+      } else {
+        reject(new Error(xhr.responseText || `Request failed with status ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Network error during upload."));
+
+    xhr.send(formData);
+  });
 }
 
 export async function deleteDocument(filename: string): Promise<DeleteResponse> {

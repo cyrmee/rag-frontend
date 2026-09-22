@@ -17,16 +17,9 @@ export const apiEndpoints: ApiEndpoint[] = [
   {
     method: "POST",
     path: "/ask",
-    summary: "Ask a question; retrieves the top-k most relevant chunks via vector similarity and generates an answer from them.",
+    summary: "Ask a question; retrieves the top-k most relevant chunks via vector similarity and streams a generated answer from them (SSE).",
     request: "{ question: string }",
-    response: "{ answer: string, sources: string[] }",
-  },
-  {
-    method: "POST",
-    path: "/ask/agentic",
-    summary: "Agentic variant of /ask — runs a multi-step retrieval loop (optionally capped via ?max_iterations=1-10) before generating an answer.",
-    request: "{ question: string }  (query param: max_iterations?)",
-    response: "{ answer: string, sources: string[] }",
+    response: "SSE stream — event: thinking | answer | done | error",
   },
   {
     method: "GET",
