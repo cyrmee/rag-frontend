@@ -880,7 +880,7 @@ function ChatMessageRow({
               <ChevronDownIcon className="size-3.5 transition-transform group-aria-expanded/trigger:rotate-180" />
               Sources ({message.sources.length})
             </CollapsibleTrigger>
-            <CollapsibleContent className="mt-1.5 flex flex-wrap gap-1.5">
+            <CollapsibleContent className="mt-1.5 flex flex-col gap-1">
               {message.sources.map((source, i) => {
                 const label = source.filename ?? source.content ?? "source";
                 const page = formatUnit(source.source_format, source.page_number);
@@ -891,28 +891,26 @@ function ChatMessageRow({
                   </>
                 );
                 return (
-                  <span
-                    key={`${message.id}-${i}`}
-                    className="inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-xs"
-                    style={{
-                      backgroundColor: "var(--color-grounded-bg)",
-                      borderColor: "var(--color-grounded-border)",
-                      color: "var(--color-grounded-fg)",
-                    }}
-                  >
+                  <div key={`${message.id}-${i}`} className="flex items-baseline gap-2 text-xs">
+                    <span
+                      className="w-4 shrink-0 text-right font-medium"
+                      style={{ color: "var(--color-grounded-fg)" }}
+                    >
+                      {i + 1}
+                    </span>
                     {source.document_url ? (
                       <a
                         href={source.document_url}
                         target="_blank"
                         rel="noreferrer noopener"
-                        className="truncate hover:underline"
+                        className="min-w-0 truncate text-muted-foreground hover:text-foreground hover:underline"
                       >
                         {body}
                       </a>
                     ) : (
-                      <span className="truncate">{body}</span>
+                      <span className="min-w-0 truncate text-muted-foreground">{body}</span>
                     )}
-                  </span>
+                  </div>
                 );
               })}
             </CollapsibleContent>
