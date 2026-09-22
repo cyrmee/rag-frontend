@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState, type AnchorHTMLAttributes 
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { streamAsk, type AskSource, type CitationSegment } from "@/lib/api";
+import { streamAsk, uploadDocumentWithProgress, type AskSource, type CitationSegment } from "@/lib/api";
 import {
   deleteConversation,
   getActivePath,
@@ -16,7 +16,7 @@ import {
   type ChatMessage,
   type StoredConversation,
 } from "@/lib/conversations";
-import DocumentPanel from "@/app/components/DocumentPanel";
+import DocumentPanel, { ACCEPTED_TYPES } from "@/app/components/DocumentPanel";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +24,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Empty, EmptyTitle } from "@/components/ui/empty";
 import {
   InputGroup,
@@ -50,6 +57,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import {
+  ArrowLeftIcon,
   ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -57,8 +65,13 @@ import {
   ChevronRightIcon,
   CopyIcon,
   FolderOpenIcon,
+  GlobeIcon,
   MenuIcon,
+  MicIcon,
+  PaperclipIcon,
   PencilIcon,
+  PlusIcon,
+  ReplyIcon,
   RotateCcwIcon,
   SquareIcon,
   SquarePenIcon,
@@ -74,6 +87,28 @@ const markdownComponents = {
     </a>
   ),
 };
+
+// Minimal shape of the Web Speech API's SpeechRecognition — not in TS's
+// DOM lib, and only the handful of members this component actually uses.
+type SpeechRecognitionEventLike = {
+  results: ArrayLike<ArrayLike<{ transcript: string }>>;
+};
+type SpeechRecognitionLike = {
+  interimResults: boolean;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | undefined {
+  if (typeof window === "undefined") return undefined;
+  const w = window as unknown as Record<string, unknown>;
+  return (w.SpeechRecognition ?? w.webkitSpeechRecognition) as
+    | (new () => SpeechRecognitionLike)
+    | undefined;
+}
 
 function makeId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -161,17 +196,28 @@ export default function Chat() {
   // titleFromQuestion() guess with the backend's generated title.
   const [serverTitle, setServerTitle] = useState<string | undefined>(undefined);
   const [history, setHistory] = useState<StoredConversation[]>([]);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
+  const [selectionMenu, setSelectionMenu] = useState<{ text: string; top: number; left: number } | null>(
+    null
+  );
+  const [listening, setListening] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const attachInputRef = useRef<HTMLInputElement>(null);
+  // Web Speech API has no official TS lib typing; SpeechRecognition here is
+  // whatever constructor the browser exposes (vendor-prefixed on Chromium).
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   const messages = useMemo(
     () => getActivePath({ nodes, activeLeafId }),
     [nodes, activeLeafId]
   );
-  const [docsOpen, setDocsOpen] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
-  const abortRef = useRef<AbortController | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Populated after mount only — reading localStorage during the initial
   // render would return different values on the server vs. the client and
@@ -181,7 +227,10 @@ export default function Chat() {
   }, []);
 
   useEffect(() => {
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      recognitionRef.current?.stop();
+    };
   }, []);
 
   // "/" focuses the composer from anywhere on the page, as long as the user
@@ -197,6 +246,36 @@ export default function Chat() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Selecting text inside the transcript surfaces a floating "Reply" button
+  // near the selection, so quoting part of an earlier message into a
+  // follow-up doesn't require manually copying and retyping it.
+  useEffect(() => {
+    function handleSelectionChange() {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+        setSelectionMenu(null);
+        return;
+      }
+      const anchorNode = sel.anchorNode;
+      if (!anchorNode || !transcriptRef.current?.contains(anchorNode)) {
+        setSelectionMenu(null);
+        return;
+      }
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        setSelectionMenu(null);
+        return;
+      }
+      setSelectionMenu({
+        text: sel.toString(),
+        top: rect.top,
+        left: rect.left + rect.width / 2,
+      });
+    }
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
   }, []);
 
   // Persist the active session a moment after messages settle, instead of on
@@ -261,7 +340,7 @@ export default function Chat() {
     try {
       await streamAsk(
         question,
-        { conversationId, parentMessageId: parentId ?? "" },
+        { conversationId, parentMessageId: parentId ?? "", webSearch: webSearchEnabled },
         {
           onThinking: (token) => {
             updateAssistant((m) => ({
@@ -350,9 +429,11 @@ export default function Chat() {
     abortRef.current?.abort();
   }
 
-  // Removes a message and everything under it in the tree (its reply, and
-  // anything that continued from there), not just the next array entry -
-  // a node can have more than one child once branching is in play.
+  // Plays the exit animation on the deleted node and everything under it
+  // (its reply, and anything that continued from there - a node can have
+  // more than one child once branching is in play), then actually drops
+  // them from state once the animation finishes instead of vanishing
+  // instantly.
   function handleDeletePair(userMessageId: string) {
     const deletedNode = nodes[userMessageId];
     if (!deletedNode) return;
@@ -366,12 +447,23 @@ export default function Chat() {
         if (m.parentId === id) stack.push(m.id);
       }
     }
-    const next = { ...nodes };
-    for (const id of toDelete) delete next[id];
-    setNodes(next);
-    if (activeLeafId && toDelete.has(activeLeafId)) {
-      setActiveLeafId(deletedNode.parentId);
-    }
+
+    setRemovingIds((prev) => new Set([...prev, ...toDelete]));
+    setTimeout(() => {
+      setNodes((prev) => {
+        const next = { ...prev };
+        for (const id of toDelete) delete next[id];
+        return next;
+      });
+      setRemovingIds((prev) => {
+        const next = new Set(prev);
+        toDelete.forEach((id) => next.delete(id));
+        return next;
+      });
+      if (activeLeafId && toDelete.has(activeLeafId)) {
+        setActiveLeafId(deletedNode.parentId);
+      }
+    }, 180);
   }
 
   function handleStartEdit(id: string, content: string) {
@@ -394,21 +486,6 @@ export default function Chat() {
     setEditingId(null);
     setEditValue("");
     await runAsk(question, node.parentId);
-  }
-
-  // Regenerating re-asks the same question that produced this answer, as
-  // a new sibling branch under the same parent - the old answer stays
-  // reachable via the branch switcher rather than being overwritten.
-  async function handleRegenerate(assistantId: string) {
-    const assistantNode = nodes[assistantId];
-    const userNode = assistantNode?.parentId ? nodes[assistantNode.parentId] : undefined;
-    if (!userNode) return;
-    await runAsk(userNode.content, userNode.parentId);
-  }
-
-  function handleSwitchBranch(siblingId: string) {
-    if (pending) return;
-    setActiveLeafId(getLatestDescendantLeaf({ nodes }, siblingId));
   }
 
   function handleNewConversation() {
@@ -455,10 +532,99 @@ export default function Chat() {
     }
   }
 
+  // Regenerating re-asks the same question that produced this answer, as
+  // a new sibling branch under the same parent - the old answer stays
+  // reachable via the branch switcher rather than being overwritten.
+  async function handleRegenerate(assistantId: string) {
+    if (pending) return;
+    const assistantNode = nodes[assistantId];
+    const userNode = assistantNode?.parentId ? nodes[assistantNode.parentId] : undefined;
+    if (!userNode) return;
+    await runAsk(userNode.content, userNode.parentId);
+  }
+
+  function handleSwitchBranch(siblingId: string) {
+    if (pending) return;
+    setActiveLeafId(getLatestDescendantLeaf({ nodes }, siblingId));
+  }
+
+  function handleReplyToSelection() {
+    if (!selectionMenu) return;
+    const quote = selectionMenu.text
+      .trim()
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    setInput((prev) => (prev ? `${quote}\n\n${prev}` : `${quote}\n\n`));
+    window.getSelection()?.removeAllRanges();
+    setSelectionMenu(null);
+    textareaRef.current?.focus();
+  }
+
+  function toggleVoiceInput() {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (!SpeechRecognitionCtor) {
+      toast.add({ title: "Voice input isn't supported in this browser", type: "error" });
+      return;
+    }
+    const recognition = new SpeechRecognitionCtor();
+    recognition.interimResults = true;
+    recognition.onresult = (event) => {
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      setInput(transcript);
+    };
+    recognition.onend = () => setListening(false);
+    recognition.onerror = () => setListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }
+
+  async function handleAttachFiles(files: FileList) {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+
+    let succeeded = 0;
+    let firstError: string | null = null;
+    for (const file of list) {
+      try {
+        await uploadDocumentWithProgress(file);
+        succeeded += 1;
+      } catch (err) {
+        firstError ??= err instanceof Error ? err.message : "Upload failed.";
+      }
+    }
+    if (attachInputRef.current) attachInputRef.current.value = "";
+
+    if (succeeded > 0) {
+      toast.add({
+        title:
+          list.length === 1
+            ? `${list[0].name} added to Sources`
+            : `${succeeded} of ${list.length} files added to Sources`,
+        type: "success",
+      });
+    }
+    if (firstError) {
+      toast.add({
+        title: succeeded > 0 ? "Some files failed to upload" : "Upload failed",
+        description: firstError,
+        type: "error",
+      });
+    }
+  }
+
   const composer = (
     <form onSubmit={handleSubmit} className="w-full">
       <InputGroup
-        className="rounded-3xl border-border/80 bg-card p-1 shadow-sm transition-colors focus-within:border-signal-gold/60 hover:border-foreground/20"
+        className="rounded-3xl border border-border bg-card p-1 shadow-sm transition-colors focus-within:border-signal-gold/60 hover:border-foreground/20"
         style={{ "--ring": "var(--color-signal-gold)" } as React.CSSProperties}
       >
         <InputGroupTextarea
@@ -477,28 +643,79 @@ export default function Chat() {
           className="max-h-40 min-h-10 px-3.5 pt-2.5 text-[15px]"
           disabled={pending}
         />
-        <InputGroupAddon align="block-end" className="justify-end px-1.5 pb-1.5">
-          {pending ? (
+        <InputGroupAddon align="block-end" className="justify-between px-1.5 pb-1.5">
+          <div className="flex items-center gap-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<InputGroupButton variant="ghost" size="icon-sm" aria-label="Add files" />}
+              >
+                <PlusIcon />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="start">
+                <DropdownMenuGroup>
+                  <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
+                    <PaperclipIcon data-icon="inline-start" />
+                    Add files
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <InputGroupButton
               type="button"
-              variant="destructive"
-              size="icon-sm"
-              onClick={handleStop}
-              aria-label="Stop generating"
+              variant={webSearchEnabled ? "default" : "outline"}
+              size="sm"
+              onClick={() => setWebSearchEnabled((v) => !v)}
+              aria-pressed={webSearchEnabled}
+              className="gap-1.5 rounded-full"
             >
-              <SquareIcon className="animate-in zoom-in-50 duration-150" />
+              <GlobeIcon data-icon="inline-start" />
+              <span className="hidden sm:inline">Search the web</span>
             </InputGroupButton>
-          ) : (
+          </div>
+          <input
+            ref={attachInputRef}
+            type="file"
+            accept={ACCEPTED_TYPES}
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) handleAttachFiles(e.target.files);
+            }}
+          />
+
+          <div className="flex items-center gap-1">
             <InputGroupButton
-              type="submit"
-              variant="default"
+              type="button"
+              variant={listening ? "default" : "ghost"}
               size="icon-sm"
-              disabled={!input.trim()}
-              aria-label="Send"
+              onClick={toggleVoiceInput}
+              aria-label={listening ? "Stop voice input" : "Voice input"}
+              title={listening ? "Stop voice input" : "Voice input"}
             >
-              <ArrowUpIcon className="animate-in zoom-in-50 duration-150" />
+              <MicIcon className={listening ? "animate-pulse" : undefined} />
             </InputGroupButton>
-          )}
+            {pending ? (
+              <InputGroupButton
+                type="button"
+                variant="destructive"
+                size="icon-sm"
+                onClick={handleStop}
+                aria-label="Stop generating"
+              >
+                <SquareIcon className="animate-in zoom-in-50 duration-150" />
+              </InputGroupButton>
+            ) : (
+              <InputGroupButton
+                type="submit"
+                variant="default"
+                size="icon-sm"
+                disabled={!input.trim()}
+                aria-label="Send"
+              >
+                <ArrowUpIcon className="animate-in zoom-in-50 duration-150" />
+              </InputGroupButton>
+            )}
+          </div>
         </InputGroupAddon>
       </InputGroup>
     </form>
@@ -506,10 +723,28 @@ export default function Chat() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
+      {selectionMenu && (
+        <div
+          className="fixed z-50 -translate-x-1/2 -translate-y-full animate-in fade-in zoom-in-95 pb-2 duration-100"
+          style={{ top: selectionMenu.top, left: selectionMenu.left }}
+        >
+          <Button
+            variant="default"
+            size="sm"
+            className="rounded-full shadow-md"
+            onClick={handleReplyToSelection}
+          >
+            <ReplyIcon data-icon="inline-start" />
+            Reply
+          </Button>
+        </div>
+      )}
+
       <aside className="hidden w-72 shrink-0 border-r border-sidebar-border lg:flex">
         <SidebarContent
           history={history}
           sessionId={sessionId}
+          sourcesActive={docsOpen}
           onNewConversation={handleNewConversation}
           onSelectConversation={handleSelectConversation}
           onDeleteConversation={handleDeleteConversation}
@@ -528,6 +763,7 @@ export default function Chat() {
           <SidebarContent
             history={history}
             sessionId={sessionId}
+            sourcesActive={docsOpen}
             onNewConversation={handleNewConversation}
             onSelectConversation={handleSelectConversation}
             onDeleteConversation={handleDeleteConversation}
@@ -540,90 +776,111 @@ export default function Chat() {
       </Sheet>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 lg:hidden">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setMobileNavOpen(true)}
-              aria-label="Open menu"
-            >
-              <MenuIcon />
-            </Button>
-            <span className="text-sm font-semibold tracking-tight text-foreground">
-              ፋይዳ አንባቢ
-            </span>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={handleNewConversation}
-            disabled={messages.length === 0}
-            aria-label="New chat"
-          >
-            <SquarePenIcon />
-          </Button>
-        </div>
-
-        {messages.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-24">
-            <Empty className="border-none p-0">
-              <EmptyTitle className="text-2xl font-semibold">
-                What should Anbabi read for you?
-              </EmptyTitle>
-            </Empty>
-            <div className="w-full max-w-2xl">{composer}</div>
-          </div>
+        {docsOpen ? (
+          <>
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setDocsOpen(false)}
+                aria-label="Back to chat"
+              >
+                <ArrowLeftIcon />
+              </Button>
+              <span className="text-sm font-semibold tracking-tight text-foreground lg:hidden">
+                Sources
+              </span>
+            </div>
+            <div className="min-h-0 flex-1 animate-in fade-in overflow-y-auto duration-200">
+              <DocumentPanel />
+            </div>
+          </>
         ) : (
           <>
-            <MessageScrollerProvider>
-              <MessageScroller className="min-h-0 flex-1 animate-in fade-in duration-300">
-                <MessageScrollerViewport>
-                  <MessageScrollerContent className="mx-auto w-full max-w-2xl px-4 py-6">
-                    {messages.map((message) => (
-                      <MessageScrollerItem
-                        key={message.id}
-                        messageId={message.id}
-                        scrollAnchor={message.role === "user"}
-                        className="animate-in fade-in slide-in-from-bottom-2 duration-300 fill-mode-both"
-                      >
-                        <ChatMessageRow
-                          message={message}
-                          pending={pending}
-                          onCopy={handleCopy}
-                          isEditing={editingId === message.id}
-                          editValue={editValue}
-                          onEditValueChange={setEditValue}
-                          onStartEdit={handleStartEdit}
-                          onCancelEdit={handleCancelEdit}
-                          onSubmitEdit={handleSubmitEdit}
-                          onDelete={handleDeletePair}
-                          onRegenerate={handleRegenerate}
-                          siblings={message.role === "user" ? getSiblings({ nodes }, message.id) : []}
-                          onSwitchBranch={handleSwitchBranch}
-                        />
-                      </MessageScrollerItem>
-                    ))}
-                  </MessageScrollerContent>
-                </MessageScrollerViewport>
-                <MessageScrollerButton />
-              </MessageScroller>
-            </MessageScrollerProvider>
-            <div className="shrink-0 animate-in fade-in px-4 pt-2 pb-6 duration-300">
-              <div className="mx-auto w-full max-w-2xl">{composer}</div>
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 lg:hidden">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setMobileNavOpen(true)}
+                  aria-label="Open menu"
+                >
+                  <MenuIcon />
+                </Button>
+                <span className="text-sm font-semibold tracking-tight text-foreground">
+                  Fayda አንባቢ
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={handleNewConversation}
+                disabled={messages.length === 0}
+                aria-label="New chat"
+              >
+                <SquarePenIcon />
+              </Button>
             </div>
+
+            {messages.length === 0 ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-40">
+                <Empty className="border-none p-0">
+                  <EmptyTitle className="text-2xl font-semibold">
+                    What should አንባቢ read for you?
+                  </EmptyTitle>
+                </Empty>
+                <div className="w-full max-w-2xl">{composer}</div>
+              </div>
+            ) : (
+              <>
+                <MessageScrollerProvider>
+                  <MessageScroller className="min-h-0 flex-1 animate-in fade-in duration-300">
+                    <MessageScrollerViewport onScroll={() => setSelectionMenu(null)}>
+                      <MessageScrollerContent
+                        ref={transcriptRef}
+                        className="mx-auto w-full max-w-2xl px-4 py-6"
+                      >
+                        {messages.map((message) => (
+                          <MessageScrollerItem
+                            key={message.id}
+                            messageId={message.id}
+                            scrollAnchor={message.role === "user"}
+                            className={
+                              removingIds.has(message.id)
+                                ? "animate-out fade-out slide-out-to-top-1 duration-180 fill-mode-forwards ease-in"
+                                : "animate-in fade-in slide-in-from-bottom-1 duration-200 ease-out fill-mode-both"
+                            }
+                          >
+                            <ChatMessageRow
+                              message={message}
+                              pending={pending}
+                              onCopy={handleCopy}
+                              onRegenerate={handleRegenerate}
+                              isEditing={editingId === message.id}
+                              editValue={editValue}
+                              onEditValueChange={setEditValue}
+                              onStartEdit={handleStartEdit}
+                              onCancelEdit={handleCancelEdit}
+                              onSubmitEdit={handleSubmitEdit}
+                              onDelete={handleDeletePair}
+                              siblings={message.role === "user" ? getSiblings({ nodes }, message.id) : []}
+                              onSwitchBranch={handleSwitchBranch}
+                            />
+                          </MessageScrollerItem>
+                        ))}
+                      </MessageScrollerContent>
+                    </MessageScrollerViewport>
+                    <MessageScrollerButton />
+                  </MessageScroller>
+                </MessageScrollerProvider>
+                <div className="shrink-0 animate-in fade-in px-4 pt-2 pb-6 duration-300">
+                  <div className="mx-auto w-full max-w-2xl">{composer}</div>
+                </div>
+              </>
+            )}
           </>
         )}
       </div>
-
-      <Sheet open={docsOpen} onOpenChange={setDocsOpen}>
-        <SheetContent className="flex w-full flex-col gap-0 p-4 sm:max-w-md">
-          <SheetHeader className="sr-only">
-            <SheetTitle>Sources</SheetTitle>
-          </SheetHeader>
-          <DocumentPanel />
-        </SheetContent>
-      </Sheet>
     </div>
   );
 }
@@ -631,6 +888,7 @@ export default function Chat() {
 function SidebarContent({
   history,
   sessionId,
+  sourcesActive,
   onNewConversation,
   onSelectConversation,
   onDeleteConversation,
@@ -638,6 +896,7 @@ function SidebarContent({
 }: {
   history: StoredConversation[];
   sessionId: string;
+  sourcesActive: boolean;
   onNewConversation: () => void;
   onSelectConversation: (stored: StoredConversation) => void;
   onDeleteConversation: (id: string, e: React.MouseEvent) => void;
@@ -655,7 +914,7 @@ function SidebarContent({
           className="rounded-full"
         />
         <span className="flex items-center gap-1.5 text-sm font-semibold tracking-tight text-white">
-          ፋይዳ አንባቢ
+          Fayda አንባቢ
           <span
             aria-hidden="true"
             className="size-1.5 rounded-full bg-signal-gold"
@@ -665,7 +924,12 @@ function SidebarContent({
 
       <div className="mt-1 flex flex-col gap-0.5">
         <SidebarItem icon={SquarePenIcon} label="New chat" onClick={onNewConversation} />
-        <SidebarItem icon={FolderOpenIcon} label="Sources" onClick={onOpenSources} />
+        <SidebarItem
+          icon={FolderOpenIcon}
+          label="Sources"
+          onClick={onOpenSources}
+          active={sourcesActive}
+        />
       </div>
 
       <div className="sidebar-scroll mt-5 flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -718,16 +982,19 @@ function SidebarItem({
   icon: Icon,
   label,
   onClick,
+  active,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   onClick: () => void;
+  active?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2.5 rounded-full px-3 py-2 text-left text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98]"
+      data-active={active}
+      className="flex items-center gap-2.5 rounded-full px-3 py-2 text-left text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[oklch(from_var(--color-signal-gold)_l_c_h_/_0.2)]"
     >
       <Icon className="size-4 shrink-0 text-sidebar-foreground/70" />
       {label}
@@ -815,6 +1082,7 @@ function ChatMessageRow({
   message,
   pending,
   onCopy,
+  onRegenerate,
   isEditing,
   editValue,
   onEditValueChange,
@@ -822,13 +1090,13 @@ function ChatMessageRow({
   onCancelEdit,
   onSubmitEdit,
   onDelete,
-  onRegenerate,
   siblings,
   onSwitchBranch,
 }: {
   message: ChatMessage;
   pending: boolean;
   onCopy: (content: string) => void;
+  onRegenerate: (assistantMessageId: string) => void;
   isEditing: boolean;
   editValue: string;
   onEditValueChange: (value: string) => void;
@@ -836,7 +1104,6 @@ function ChatMessageRow({
   onCancelEdit: () => void;
   onSubmitEdit: (id: string) => void;
   onDelete: (id: string) => void;
-  onRegenerate: (assistantMessageId: string) => void;
   siblings: ChatMessage[];
   onSwitchBranch: (siblingId: string) => void;
 }) {
@@ -930,6 +1197,19 @@ function ChatMessageRow({
           <Bubble variant="destructive" role="alert">
             <BubbleContent>{message.content}</BubbleContent>
           </Bubble>
+          {!pending && (
+            <MessageFooter>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => onRegenerate(message.id)}
+                aria-label="Try again"
+                title="Try again"
+              >
+                <RotateCcwIcon />
+              </Button>
+            </MessageFooter>
+          )}
         </MessageContent>
       </Message>
     );

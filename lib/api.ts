@@ -134,6 +134,10 @@ export async function streamAsk(
     // it), or an earlier message's id to branch from anywhere else - see
     // AskRequest.parent_message_id on the backend.
     parentMessageId?: string;
+    // `webSearch` isn't live on the backend yet - included here so the
+    // frontend already sends it once /ask supports it; harmless (ignored)
+    // until then.
+    webSearch?: boolean;
   },
   handlers: AskStreamHandlers,
   signal?: AbortSignal
@@ -153,6 +157,7 @@ export async function streamAsk(
       question,
       conversation_id: options.conversationId,
       parent_message_id: options.parentMessageId,
+      ...(options.webSearch ? { web_search: true } : {}),
     }),
     signal,
   });

@@ -181,7 +181,7 @@ export function formatRelativeTime(timestamp: number): string {
 
   if (diffMs < minute) return "just now";
   if (diffMs < hour) return `${Math.floor(diffMs / minute)}m ago`;
-  if (diffMs < day) return `${Math.floor(diffMs / day)}h ago`;
+  if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
   if (diffMs < 7 * day) return `${Math.floor(diffMs / day)}d ago`;
   return new Date(timestamp).toLocaleDateString(undefined, {
     month: "short",
