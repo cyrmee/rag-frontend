@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type AnchorHTMLAttributes } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { streamAsk, type AskSource } from "@/lib/api";
@@ -21,6 +21,16 @@ type ChatMessage = {
   toolEvents?: ToolEvent[];
 };
 
+// Citation links (and any other link the model's markdown happens to
+// produce) open in a new tab rather than navigating away from the chat.
+const markdownComponents = {
+  a: ({ href, title, children }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} title={title} target="_blank" rel="noreferrer noopener" className="chat-citation-link">
+      {children}
+    </a>
+  ),
+};
+
 function makeId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -35,6 +45,23 @@ function formatArgs(args: unknown): string {
   } catch {
     return String(args);
   }
+}
+
+// The backend numbers each retrieved chunk [N] (1-based position in
+// `sources`) and instructs the model to cite that exact number after
+// every sentence/claim it supports - e.g. "...AES-256 encryption [7]."
+// Turns each [N] into a real markdown link to sources[N-1].document_url
+// (title = filename, for a hover tooltip) so ReactMarkdown renders it as
+// a clickable citation; a number with no matching/undated source (or no
+// document_url) is left as plain bracketed text.
+function linkifyCitations(content: string, sources: AskSource[] | undefined): string {
+  if (!sources || sources.length === 0) return content;
+  return content.replace(/\[(\d+)\]/g, (match, numStr: string) => {
+    const source = sources[Number(numStr) - 1];
+    if (!source?.document_url) return match;
+    const title = (source.filename ?? "").replace(/"/g, "'");
+    return `[${match}](${source.document_url} "${title}")`;
+  });
 }
 
 // page_number means something different per format: a real page (pdf), a
@@ -229,8 +256,8 @@ export default function Chat() {
             {message.role === "assistant" ? (
               <div className="chat-content chat-markdown">
                 {message.content ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {message.content}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {linkifyCitations(message.content, message.sources)}
                   </ReactMarkdown>
                 ) : (
                   <p>{pending ? "…" : ""}</p>

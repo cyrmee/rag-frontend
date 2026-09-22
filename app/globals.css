@@ -748,6 +748,25 @@ kbd {
   text-decoration: underline;
 }
 
+/* Inline per-sentence citation markers, e.g. "...AES-256 encryption [7]."
+   linked to the matching entry in the Sources list below - same color
+   family as .chat-source-tag so the connection between the two reads
+   clearly, but small/raised so it doesn't compete with the sentence. */
+.chat-citation-link {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--support);
+  text-decoration: none;
+  vertical-align: super;
+  line-height: 1;
+  padding: 0 1px;
+}
+
+.chat-citation-link:hover {
+  text-decoration: underline;
+}
+
 .chat-composer {
   display: flex;
   gap: 10px;
