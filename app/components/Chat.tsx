@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState, type AnchorHTMLAttributes } from "r
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { streamAsk, type AskSource, type CitationSegment } from "@/lib/api";
+import { streamAsk, uploadDocumentWithProgress, type AskSource, type CitationSegment } from "@/lib/api";
 import {
   deleteConversation,
   loadConversations,
@@ -13,7 +13,7 @@ import {
   type ChatMessage,
   type StoredConversation,
 } from "@/lib/conversations";
-import DocumentPanel from "@/app/components/DocumentPanel";
+import DocumentPanel, { ACCEPTED_TYPES } from "@/app/components/DocumentPanel";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,6 +21,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Empty, EmptyTitle } from "@/components/ui/empty";
 import {
   InputGroup,
@@ -54,7 +61,10 @@ import {
   CopyIcon,
   FolderOpenIcon,
   MenuIcon,
+  MicIcon,
+  PaperclipIcon,
   PencilIcon,
+  PlusIcon,
   ReplyIcon,
   RotateCcwIcon,
   SquareIcon,
@@ -71,6 +81,28 @@ const markdownComponents = {
     </a>
   ),
 };
+
+// Minimal shape of the Web Speech API's SpeechRecognition — not in TS's
+// DOM lib, and only the handful of members this component actually uses.
+type SpeechRecognitionEventLike = {
+  results: ArrayLike<ArrayLike<{ transcript: string }>>;
+};
+type SpeechRecognitionLike = {
+  interimResults: boolean;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | undefined {
+  if (typeof window === "undefined") return undefined;
+  const w = window as unknown as Record<string, unknown>;
+  return (w.SpeechRecognition ?? w.webkitSpeechRecognition) as
+    | (new () => SpeechRecognitionLike)
+    | undefined;
+}
 
 function makeId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -158,9 +190,14 @@ export default function Chat() {
   const [selectionMenu, setSelectionMenu] = useState<{ text: string; top: number; left: number } | null>(
     null
   );
+  const [listening, setListening] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const attachInputRef = useRef<HTMLInputElement>(null);
+  // Web Speech API has no official TS lib typing; SpeechRecognition here is
+  // whatever constructor the browser exposes (vendor-prefixed on Chromium).
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   // Populated after mount only — reading localStorage during the initial
   // render would return different values on the server vs. the client and
@@ -170,7 +207,10 @@ export default function Chat() {
   }, []);
 
   useEffect(() => {
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      recognitionRef.current?.stop();
+    };
   }, []);
 
   // "/" focuses the composer from anywhere on the page, as long as the user
@@ -446,10 +486,70 @@ export default function Chat() {
     textareaRef.current?.focus();
   }
 
+  function toggleVoiceInput() {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (!SpeechRecognitionCtor) {
+      toast.add({ title: "Voice input isn't supported in this browser", type: "error" });
+      return;
+    }
+    const recognition = new SpeechRecognitionCtor();
+    recognition.interimResults = true;
+    recognition.onresult = (event) => {
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      setInput(transcript);
+    };
+    recognition.onend = () => setListening(false);
+    recognition.onerror = () => setListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }
+
+  async function handleAttachFiles(files: FileList) {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+
+    let succeeded = 0;
+    let firstError: string | null = null;
+    for (const file of list) {
+      try {
+        await uploadDocumentWithProgress(file);
+        succeeded += 1;
+      } catch (err) {
+        firstError ??= err instanceof Error ? err.message : "Upload failed.";
+      }
+    }
+    if (attachInputRef.current) attachInputRef.current.value = "";
+
+    if (succeeded > 0) {
+      toast.add({
+        title:
+          list.length === 1
+            ? `${list[0].name} added to Sources`
+            : `${succeeded} of ${list.length} files added to Sources`,
+        type: "success",
+      });
+    }
+    if (firstError) {
+      toast.add({
+        title: succeeded > 0 ? "Some files failed to upload" : "Upload failed",
+        description: firstError,
+        type: "error",
+      });
+    }
+  }
+
   const composer = (
     <form onSubmit={handleSubmit} className="w-full">
       <InputGroup
-        className="rounded-3xl border-border/80 bg-card p-1 shadow-sm transition-colors focus-within:border-signal-gold/60 hover:border-foreground/20"
+        className="rounded-3xl border border-border bg-card p-1 shadow-sm transition-colors focus-within:border-signal-gold/60 hover:border-foreground/20"
         style={{ "--ring": "var(--color-signal-gold)" } as React.CSSProperties}
       >
         <InputGroupTextarea
@@ -468,28 +568,66 @@ export default function Chat() {
           className="max-h-40 min-h-10 px-3.5 pt-2.5 text-[15px]"
           disabled={pending}
         />
-        <InputGroupAddon align="block-end" className="justify-end px-1.5 pb-1.5">
-          {pending ? (
+        <InputGroupAddon align="block-end" className="justify-between px-1.5 pb-1.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<InputGroupButton variant="ghost" size="icon-sm" aria-label="Add files" />}
+            >
+              <PlusIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start">
+              <DropdownMenuGroup>
+                <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
+                  <PaperclipIcon data-icon="inline-start" />
+                  Add files
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <input
+            ref={attachInputRef}
+            type="file"
+            accept={ACCEPTED_TYPES}
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) handleAttachFiles(e.target.files);
+            }}
+          />
+
+          <div className="flex items-center gap-1">
             <InputGroupButton
               type="button"
-              variant="destructive"
+              variant={listening ? "default" : "ghost"}
               size="icon-sm"
-              onClick={handleStop}
-              aria-label="Stop generating"
+              onClick={toggleVoiceInput}
+              aria-label={listening ? "Stop voice input" : "Voice input"}
+              title={listening ? "Stop voice input" : "Voice input"}
             >
-              <SquareIcon className="animate-in zoom-in-50 duration-150" />
+              <MicIcon className={listening ? "animate-pulse" : undefined} />
             </InputGroupButton>
-          ) : (
-            <InputGroupButton
-              type="submit"
-              variant="default"
-              size="icon-sm"
-              disabled={!input.trim()}
-              aria-label="Send"
-            >
-              <ArrowUpIcon className="animate-in zoom-in-50 duration-150" />
-            </InputGroupButton>
-          )}
+            {pending ? (
+              <InputGroupButton
+                type="button"
+                variant="destructive"
+                size="icon-sm"
+                onClick={handleStop}
+                aria-label="Stop generating"
+              >
+                <SquareIcon className="animate-in zoom-in-50 duration-150" />
+              </InputGroupButton>
+            ) : (
+              <InputGroupButton
+                type="submit"
+                variant="default"
+                size="icon-sm"
+                disabled={!input.trim()}
+                aria-label="Send"
+              >
+                <ArrowUpIcon className="animate-in zoom-in-50 duration-150" />
+              </InputGroupButton>
+            )}
+          </div>
         </InputGroupAddon>
       </InputGroup>
     </form>
@@ -597,7 +735,7 @@ export default function Chat() {
             </div>
 
             {messages.length === 0 ? (
-              <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-24">
+              <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-40">
                 <Empty className="border-none p-0">
                   <EmptyTitle className="text-2xl font-semibold">
                     What should አንባቢ read for you?

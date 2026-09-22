@@ -36,8 +36,8 @@ import {
   XIcon,
 } from "lucide-react";
 
-const ACCEPTED_TYPES = ".pdf,.docx,.pptx,.xlsx,.txt,.md";
-const ACCEPTED_LABEL = "PDF, Word, PowerPoint, Excel, text, or markdown";
+export const ACCEPTED_TYPES = ".pdf,.docx,.pptx,.xlsx,.txt,.md";
+export const ACCEPTED_LABEL = "PDF, Word, PowerPoint, Excel, text, or markdown";
 
 function iconForFilename(filename: string) {
   const ext = filename.split(".").pop()?.toLowerCase();
