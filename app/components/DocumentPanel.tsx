@@ -70,6 +70,7 @@ export default function DocumentPanel() {
   const [loading, setLoading] = useState(true);
   const [inFlight, setInFlight] = useState<InFlightUpload[]>([]);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [removingFilenames, setRemovingFilenames] = useState<Set<string>>(new Set());
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [dragActive, setDragActive] = useState(false);
@@ -198,6 +199,11 @@ export default function DocumentPanel() {
     try {
       setDeleting(filename);
       await deleteDocument(filename);
+      // Play the exit animation before the row actually disappears from the
+      // refreshed list, instead of it vanishing the instant the request
+      // resolves.
+      setRemovingFilenames((prev) => new Set(prev).add(filename));
+      await new Promise((resolve) => setTimeout(resolve, 180));
       await refresh();
       toast.add({ title: `${filename} removed`, type: "success" });
     } catch (err) {
@@ -208,6 +214,11 @@ export default function DocumentPanel() {
       });
     } finally {
       setDeleting(null);
+      setRemovingFilenames((prev) => {
+        const next = new Set(prev);
+        next.delete(filename);
+        return next;
+      });
     }
   }
 
@@ -356,11 +367,16 @@ export default function DocumentPanel() {
             filteredDocuments.map((doc) => {
               const Icon = iconForFilename(doc.filename);
               const isDeleting = deleting === doc.filename;
+              const isRemoving = removingFilenames.has(doc.filename);
               return (
                 <Attachment
                   key={doc.filename}
                   state="done"
-                  className="w-full animate-in fade-in slide-in-from-bottom-1 duration-200"
+                  className={
+                    isRemoving
+                      ? "w-full animate-out fade-out zoom-out-95 duration-180 fill-mode-forwards ease-in"
+                      : "w-full animate-in fade-in slide-in-from-bottom-1 duration-200 ease-out"
+                  }
                 >
                   <AttachmentMedia>
                     <Icon />

@@ -154,6 +154,7 @@ export default function Chat() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
   const [selectionMenu, setSelectionMenu] = useState<{ text: string; top: number; left: number } | null>(
     null
   );
@@ -336,16 +337,26 @@ export default function Chat() {
     abortRef.current?.abort();
   }
 
+  // Plays the exit animation on both rows of the pair before actually
+  // dropping them from state, instead of having them vanish instantly.
   function handleDeletePair(userMessageId: string) {
-    setMessages((prev) => {
-      const index = prev.findIndex((m) => m.id === userMessageId);
-      if (index === -1) return prev;
-      const nextRole = prev[index + 1]?.role;
-      const hasPairedResponse = nextRole === "assistant" || nextRole === "error";
-      return prev.filter(
-        (_, i) => i !== index && !(hasPairedResponse && i === index + 1)
-      );
-    });
+    const index = messages.findIndex((m) => m.id === userMessageId);
+    if (index === -1) return;
+    const nextRole = messages[index + 1]?.role;
+    const hasPairedResponse = nextRole === "assistant" || nextRole === "error";
+    const idsToRemove = hasPairedResponse
+      ? [messages[index].id, messages[index + 1].id]
+      : [messages[index].id];
+
+    setRemovingIds((prev) => new Set([...prev, ...idsToRemove]));
+    setTimeout(() => {
+      setMessages((prev) => prev.filter((m) => !idsToRemove.includes(m.id)));
+      setRemovingIds((prev) => {
+        const next = new Set(prev);
+        idsToRemove.forEach((id) => next.delete(id));
+        return next;
+      });
+    }, 180);
   }
 
   function handleStartEdit(id: string, content: string) {
@@ -608,7 +619,11 @@ export default function Chat() {
                             key={message.id}
                             messageId={message.id}
                             scrollAnchor={message.role === "user"}
-                            className="animate-in fade-in slide-in-from-bottom-2 duration-300 fill-mode-both"
+                            className={
+                              removingIds.has(message.id)
+                                ? "animate-out fade-out slide-out-to-top-1 duration-180 fill-mode-forwards ease-in"
+                                : "animate-in fade-in slide-in-from-bottom-1 duration-200 ease-out fill-mode-both"
+                            }
                           >
                             <ChatMessageRow
                               message={message}
