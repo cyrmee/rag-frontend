@@ -15,6 +15,31 @@ export type DeleteResponse = {
   chunks_deleted: number;
 };
 
+export type ConversationSummary = {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+  first_question: string | null;
+};
+
+export type ConversationMessageNode = {
+  id: string;
+  parent_message_id: string | null;
+  role: string;
+  content: string;
+  created_at: string;
+};
+
+export type ConversationDetail = {
+  id: string;
+  title: string | null;
+  active_message_id: string | null;
+  // Every message in every branch, not just the active path - see
+  // app/schemas.py's ConversationDetail.
+  messages: ConversationMessageNode[];
+};
+
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -235,6 +260,27 @@ export async function streamAsk(
 export async function listDocuments(): Promise<DocumentEntry[]> {
   const res = await fetch(new URL("/documents", API_BASE));
   return handleResponse<DocumentEntry[]>(res);
+}
+
+export async function listConversations(): Promise<ConversationSummary[]> {
+  const res = await fetch(new URL("/conversations", API_BASE));
+  return handleResponse<ConversationSummary[]>(res);
+}
+
+export async function getConversation(id: string): Promise<ConversationDetail> {
+  const res = await fetch(new URL(`/conversations/${encodeURIComponent(id)}`, API_BASE));
+  return handleResponse<ConversationDetail>(res);
+}
+
+export async function deleteConversationApi(id: string): Promise<void> {
+  const res = await fetch(
+    new URL(`/conversations/${encodeURIComponent(id)}`, API_BASE),
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(body || `Request failed with status ${res.status}`);
+  }
 }
 
 export async function uploadDocument(file: File): Promise<UploadResponse> {

@@ -1,20 +1,25 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type AnchorHTMLAttributes } from "react";
+import { useEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { streamAsk, uploadDocumentWithProgress, type AskSource, type CitationSegment } from "@/lib/api";
 import {
-  deleteConversation,
+  deleteConversationApi,
+  getConversation,
+  listConversations,
+  streamAsk,
+  uploadDocumentWithProgress,
+  type AskSource,
+  type CitationSegment,
+  type ConversationSummary,
+} from "@/lib/api";
+import {
   getActivePath,
   getLatestDescendantLeaf,
   getSiblings,
-  loadConversations,
-  saveConversation,
   titleFromQuestion,
   type ChatMessage,
-  type StoredConversation,
 } from "@/lib/conversations";
 import DocumentPanel, { ACCEPTED_TYPES } from "@/app/components/DocumentPanel";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -175,12 +180,6 @@ function formatUnit(sourceFormat: string | undefined, pageNumber: number | null 
 }
 
 export default function Chat() {
-  // useId() (not makeId()) here: it's guaranteed to match between the
-  // server-rendered HTML and the client's first render, unlike
-  // crypto.randomUUID(), which would produce a different value on each side
-  // and trigger a hydration mismatch.
-  const initialSessionId = useId();
-  const [sessionId, setSessionId] = useState(initialSessionId);
   // The conversation tree: every message ever created (not just the
   // active branch) plus which leaf is currently shown. `messages` below
   // derives the rendered transcript by walking parentId from activeLeafId.
@@ -188,6 +187,11 @@ export default function Chat() {
   const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
+  // The backend conversation this session is attached to - undefined until
+  // the first turn completes (see runAsk's onDone). Doubles as the active
+  // conversation's identity for the sidebar/history, replacing the old
+  // localStorage-only session id: a conversation isn't "real" (or listed)
+  // until the backend has actually persisted a turn for it.
   const [conversationId, setConversationId] = useState<string | undefined>(
     undefined
   );
@@ -195,7 +199,7 @@ export default function Chat() {
   // completes (see runAsk's onDone) - overrides the client-side
   // titleFromQuestion() guess with the backend's generated title.
   const [serverTitle, setServerTitle] = useState<string | undefined>(undefined);
-  const [history, setHistory] = useState<StoredConversation[]>([]);
+  const [history, setHistory] = useState<ConversationSummary[]>([]);
   const [docsOpen, setDocsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -219,11 +223,21 @@ export default function Chat() {
     [nodes, activeLeafId]
   );
 
-  // Populated after mount only — reading localStorage during the initial
-  // render would return different values on the server vs. the client and
-  // trigger a hydration mismatch.
+  // The sidebar's conversation list is fetched from the backend, not
+  // cached locally - it's the source of truth for what conversations
+  // exist and what they're titled, and survives clearing browser storage
+  // or switching devices. Best-effort: a failed fetch just leaves the
+  // sidebar showing whatever it last had rather than surfacing an error.
+  async function refreshHistory() {
+    try {
+      setHistory(await listConversations());
+    } catch {
+      // ignore
+    }
+  }
+
   useEffect(() => {
-    setHistory(loadConversations());
+    refreshHistory();
   }, []);
 
   useEffect(() => {
@@ -277,26 +291,6 @@ export default function Chat() {
     document.addEventListener("selectionchange", handleSelectionChange);
     return () => document.removeEventListener("selectionchange", handleSelectionChange);
   }, []);
-
-  // Persist the active session a moment after messages settle, instead of on
-  // every streamed token, so a fast-typing/fast-streaming turn doesn't hammer
-  // localStorage.
-  useEffect(() => {
-    const firstUser = messages.find((m) => m.role === "user");
-    if (!firstUser) return;
-    const timeout = setTimeout(() => {
-      saveConversation({
-        id: sessionId,
-        title: serverTitle ?? titleFromQuestion(firstUser.content),
-        updatedAt: Date.now(),
-        conversationId,
-        nodes,
-        activeLeafId,
-      });
-      setHistory(loadConversations());
-    }, 400);
-    return () => clearTimeout(timeout);
-  }, [messages, nodes, activeLeafId, conversationId, sessionId, serverTitle]);
 
   // Shared by a normal send, an edited question, and a regenerated answer.
   // `parentId` is the tree node the new user turn attaches under - null
@@ -396,6 +390,9 @@ export default function Chat() {
             if (assistantMessageId) setActiveLeafId(assistantMessageId);
             if (nextConversationId) setConversationId(nextConversationId);
             if (title) setServerTitle(title);
+            // Refresh so the sidebar picks up this turn's new/updated
+            // title and recency without waiting for the next mount.
+            refreshHistory();
           },
           onError: (message) => {
             updateAssistant((m) => ({ ...m, role: "error", content: message }));
@@ -495,31 +492,59 @@ export default function Chat() {
     setConversationId(undefined);
     setServerTitle(undefined);
     setPending(false);
-    setSessionId(makeId());
     setMobileNavOpen(false);
   }
 
-  function handleSelectConversation(stored: StoredConversation) {
+  async function handleSelectConversation(id: string) {
     abortRef.current?.abort();
-    setSessionId(stored.id);
-    setNodes(stored.nodes);
-    setActiveLeafId(stored.activeLeafId);
-    setConversationId(stored.conversationId);
-    setServerTitle(stored.title);
     setPending(false);
     setMobileNavOpen(false);
+    try {
+      const detail = await getConversation(id);
+      const nextNodes: Record<string, ChatMessage> = {};
+      for (const m of detail.messages) {
+        nextNodes[m.id] = {
+          id: m.id,
+          parentId: m.parent_message_id,
+          role: m.role as ChatMessage["role"],
+          content: m.content,
+          createdAt: Date.parse(m.created_at),
+        };
+      }
+      setNodes(nextNodes);
+      setActiveLeafId(detail.active_message_id);
+      setConversationId(detail.id);
+      setServerTitle(detail.title ?? undefined);
+    } catch (err) {
+      toast.add({
+        title: "Couldn't open that conversation",
+        description: err instanceof Error ? err.message : undefined,
+        type: "error",
+      });
+      // It may have been deleted elsewhere - drop it from the visible list.
+      refreshHistory();
+    }
   }
 
-  function handleDeleteConversation(id: string, e: React.MouseEvent) {
+  async function handleDeleteConversation(id: string, e: React.MouseEvent) {
     e.stopPropagation();
-    deleteConversation(id);
+    const wasActive = id === conversationId;
     setHistory((prev) => prev.filter((c) => c.id !== id));
-    if (id === sessionId) {
+    if (wasActive) {
       setNodes({});
       setActiveLeafId(null);
       setConversationId(undefined);
       setServerTitle(undefined);
-      setSessionId(makeId());
+    }
+    try {
+      await deleteConversationApi(id);
+    } catch (err) {
+      toast.add({
+        title: "Couldn't delete conversation",
+        description: err instanceof Error ? err.message : undefined,
+        type: "error",
+      });
+      refreshHistory();
     }
   }
 
@@ -743,7 +768,7 @@ export default function Chat() {
       <aside className="hidden w-72 shrink-0 border-r border-sidebar-border lg:flex">
         <SidebarContent
           history={history}
-          sessionId={sessionId}
+          activeConversationId={conversationId}
           sourcesActive={docsOpen}
           onNewConversation={handleNewConversation}
           onSelectConversation={handleSelectConversation}
@@ -762,7 +787,7 @@ export default function Chat() {
           </SheetHeader>
           <SidebarContent
             history={history}
-            sessionId={sessionId}
+            activeConversationId={conversationId}
             sourcesActive={docsOpen}
             onNewConversation={handleNewConversation}
             onSelectConversation={handleSelectConversation}
@@ -887,18 +912,18 @@ export default function Chat() {
 
 function SidebarContent({
   history,
-  sessionId,
+  activeConversationId,
   sourcesActive,
   onNewConversation,
   onSelectConversation,
   onDeleteConversation,
   onOpenSources,
 }: {
-  history: StoredConversation[];
-  sessionId: string;
+  history: ConversationSummary[];
+  activeConversationId: string | undefined;
   sourcesActive: boolean;
   onNewConversation: () => void;
-  onSelectConversation: (stored: StoredConversation) => void;
+  onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string, e: React.MouseEvent) => void;
   onOpenSources: () => void;
 }) {
@@ -942,35 +967,38 @@ function SidebarContent({
           </p>
         ) : (
           <div className="flex flex-col gap-0.5">
-            {history.map((conv) => (
-              <div
-                key={conv.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => onSelectConversation(conv)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelectConversation(conv);
-                  }
-                }}
-                className="group/history-row flex cursor-pointer items-center justify-between gap-2 rounded-full px-3 py-2 text-left text-sm transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[oklch(from_var(--color-signal-gold)_l_c_h_/_0.2)]"
-                data-active={conv.id === sessionId}
-              >
-                <span className="min-w-0 flex-1 truncate text-white">
-                  {conv.title}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className="shrink-0 text-sidebar-foreground opacity-0 hover:bg-white/15 hover:text-white group-hover/history-row:opacity-100"
-                  onClick={(e) => onDeleteConversation(conv.id, e)}
-                  aria-label={`Delete ${conv.title}`}
+            {history.map((conv) => {
+              const label = conv.title ?? titleFromQuestion(conv.first_question ?? "");
+              return (
+                <div
+                  key={conv.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectConversation(conv.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectConversation(conv.id);
+                    }
+                  }}
+                  className="group/history-row flex cursor-pointer items-center justify-between gap-2 rounded-full px-3 py-2 text-left text-sm transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[oklch(from_var(--color-signal-gold)_l_c_h_/_0.2)]"
+                  data-active={conv.id === activeConversationId}
                 >
-                  <Trash2Icon />
-                </Button>
-              </div>
-            ))}
+                  <span className="min-w-0 flex-1 truncate text-white">
+                    {label}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="shrink-0 text-sidebar-foreground opacity-0 hover:bg-white/15 hover:text-white group-hover/history-row:opacity-100"
+                    onClick={(e) => onDeleteConversation(conv.id, e)}
+                    aria-label={`Delete ${label}`}
+                  >
+                    <Trash2Icon />
+                  </Button>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

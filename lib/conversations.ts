@@ -12,7 +12,11 @@ export type ToolEvent = {
 // instead of overwriting anything, so both stay reachable. `id` mirrors
 // the backend's message id once a turn completes (a temporary local id
 // while it's still in flight - see Chat.tsx's runAsk). `parentId` is null
-// for a message at the conversation's root.
+// for a message at the conversation's root. The backend is the only
+// source of truth for a conversation's messages (GET /conversations/{id})
+// - sources/citations/thinking/toolEvents are ephemeral, per-turn UI
+// extras that only exist for the turn just streamed in this session, not
+// persisted server-side or restored when reopening a past conversation.
 export type ChatMessage = {
   id: string;
   parentId: string | null;
@@ -25,59 +29,14 @@ export type ChatMessage = {
   createdAt: number;
 };
 
-export type StoredConversation = {
-  id: string;
-  title: string;
-  updatedAt: number;
-  conversationId?: string;
-  // Every message ever created in this conversation, keyed by id - not
-  // just the currently active branch. `activeLeafId` (null for an empty
-  // conversation) is the tip of the path currently shown; walk `parentId`
-  // from there to the root to render the transcript (see getActivePath).
+type ConversationTree = {
   nodes: Record<string, ChatMessage>;
   activeLeafId: string | null;
 };
 
-// Pre-branching conversations were stored as a flat `messages` array with
-// no `parentId`. Loaded once and converted into a straight-line tree
-// (each message's parent is the one before it) so old conversations keep
-// rendering and resending correctly instead of silently vanishing after
-// this schema change.
-type LegacyStoredConversation = {
-  id: string;
-  title: string;
-  updatedAt: number;
-  conversationId?: string;
-  messages: Omit<ChatMessage, "parentId">[];
-};
-
-function isLegacy(
-  raw: StoredConversation | LegacyStoredConversation
-): raw is LegacyStoredConversation {
-  return Array.isArray((raw as LegacyStoredConversation).messages);
-}
-
-function migrate(raw: StoredConversation | LegacyStoredConversation): StoredConversation {
-  if (!isLegacy(raw)) return raw;
-  const nodes: Record<string, ChatMessage> = {};
-  let parentId: string | null = null;
-  for (const m of raw.messages) {
-    nodes[m.id] = { ...m, parentId };
-    parentId = m.id;
-  }
-  return {
-    id: raw.id,
-    title: raw.title,
-    updatedAt: raw.updatedAt,
-    conversationId: raw.conversationId,
-    nodes,
-    activeLeafId: parentId,
-  };
-}
-
 // The currently active transcript: walks `parentId` from `activeLeafId`
 // up to the root, oldest first - what actually renders in the chat.
-export function getActivePath(conversation: Pick<StoredConversation, "nodes" | "activeLeafId">): ChatMessage[] {
+export function getActivePath(conversation: ConversationTree): ChatMessage[] {
   const path: ChatMessage[] = [];
   let current = conversation.activeLeafId;
   while (current) {
@@ -94,7 +53,7 @@ export function getActivePath(conversation: Pick<StoredConversation, "nodes" | "
 // messages branch (each has exactly one assistant reply as its child), so
 // callers only need this for role: "user" nodes.
 export function getSiblings(
-  conversation: Pick<StoredConversation, "nodes">,
+  conversation: Pick<ConversationTree, "nodes">,
   messageId: string
 ): ChatMessage[] {
   const node = conversation.nodes[messageId];
@@ -108,7 +67,7 @@ export function getSiblings(
 // through whichever child was created most recently at each step, until a
 // leaf is reached.
 export function getLatestDescendantLeaf(
-  conversation: Pick<StoredConversation, "nodes">,
+  conversation: Pick<ConversationTree, "nodes">,
   messageId: string
 ): string {
   let current = messageId;
@@ -120,46 +79,9 @@ export function getLatestDescendantLeaf(
   }
 }
 
-const STORAGE_KEY = "anbabi:conversations";
-const MAX_CONVERSATIONS = 50;
-
-function isBrowser() {
-  return typeof window !== "undefined";
-}
-
-export function loadConversations(): StoredConversation[] {
-  if (!isBrowser()) return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(migrate) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveConversation(conversation: StoredConversation) {
-  if (!isBrowser()) return;
-  const rest = loadConversations().filter((c) => c.id !== conversation.id);
-  const next = [conversation, ...rest].slice(0, MAX_CONVERSATIONS);
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    // storage full or unavailable; the conversation just won't persist
-  }
-}
-
-export function deleteConversation(id: string) {
-  if (!isBrowser()) return;
-  const next = loadConversations().filter((c) => c.id !== id);
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    // ignore
-  }
-}
-
+// Fallback label for a conversation whose backend title hasn't been
+// generated yet (or failed to generate) - a truncated copy of its first
+// question, same as the title the backend itself falls back to.
 export function titleFromQuestion(question: string): string {
   const trimmed = question.trim().replace(/\s+/g, " ");
   if (!trimmed) return "New conversation";
