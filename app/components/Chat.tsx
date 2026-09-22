@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type AnchorHTMLAttributes } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { streamAsk, type AskSource } from "@/lib/api";
+import { streamAsk, type AskSource, type CitationSegment } from "@/lib/api";
 
 type ToolEvent = {
   id: string;
@@ -18,6 +18,7 @@ type ChatMessage = {
   content: string;
   thinking?: string;
   sources?: AskSource[];
+  citations?: CitationSegment[];
   toolEvents?: ToolEvent[];
 };
 
@@ -47,21 +48,34 @@ function formatArgs(args: unknown): string {
   }
 }
 
-// The backend numbers each retrieved chunk [N] (1-based position in
-// `sources`) and instructs the model to cite that exact number after
-// every sentence/claim it supports - e.g. "...AES-256 encryption [7]."
-// Turns each [N] into a real markdown link to sources[N-1].document_url
-// (title = filename, for a hover tooltip) so ReactMarkdown renders it as
-// a clickable citation; a number with no matching/undated source (or no
-// document_url) is left as plain bracketed text.
-function linkifyCitations(content: string, sources: AskSource[] | undefined): string {
-  if (!sources || sources.length === 0) return content;
-  return content.replace(/\[(\d+)\]/g, (match, numStr: string) => {
-    const source = sources[Number(numStr) - 1];
-    if (!source?.document_url) return match;
-    const title = (source.filename ?? "").replace(/"/g, "'");
-    return `[${match}](${source.document_url} "${title}")`;
-  });
+// `citations` (from the done event) is the structured breakdown - each
+// segment's [N] markers are already stripped, replaced by source_indices
+// (1-based into `sources`). Rebuilds one markdown string: each segment's
+// text gets a real markdown link appended per citation index (title =
+// filename, for a hover tooltip; an index with no matching source, or a
+// source with no document_url, falls back to plain "[N]" text rather than
+// a dead link), then every segment is rejoined with "\n" - an empty
+// segment (a paragraph break marker - see app/agent.py's
+// _segment_citations) naturally reconstructs the original blank line
+// this way, so paragraphs/lists come back exactly as the model wrote
+// them. Only feed this to ReactMarkdown as one combined string, not one
+// call per segment - a lone "* item" line rendered in isolation loses
+// its sibling list items.
+function buildCitedMarkdown(citations: CitationSegment[], sources: AskSource[] | undefined): string {
+  return citations
+    .map((segment) => {
+      if (segment.source_indices.length === 0) return segment.text;
+      const links = segment.source_indices
+        .map((idx) => {
+          const source = sources?.[idx - 1];
+          if (!source?.document_url) return `[${idx}]`;
+          const title = (source.filename ?? "").replace(/"/g, "'");
+          return `[[${idx}]](${source.document_url} "${title}")`;
+        })
+        .join("");
+      return `${segment.text} ${links}`;
+    })
+    .join("\n");
 }
 
 // page_number means something different per format: a real page (pdf), a
@@ -164,9 +178,9 @@ export default function Chat() {
             }));
             scrollToBottom();
           },
-          onDone: (sources, conversationId) => {
+          onDone: (sources, conversationId, citations) => {
             if (conversationId) conversationIdRef.current = conversationId;
-            updateAssistant((m) => ({ ...m, sources }));
+            updateAssistant((m) => ({ ...m, sources, citations }));
           },
           onError: (message) => {
             updateAssistant((m) => ({ ...m, role: "error", content: message }));
@@ -255,9 +269,19 @@ export default function Chat() {
 
             {message.role === "assistant" ? (
               <div className="chat-content chat-markdown">
-                {message.content ? (
+                {message.citations && message.citations.length > 0 ? (
+                  // Answer is complete: render the clean, structured
+                  // citation breakdown rather than the raw streamed text
+                  // (which may still contain literal "[N]" markers as the
+                  // model generated them).
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                    {linkifyCitations(message.content, message.sources)}
+                    {buildCitedMarkdown(message.citations, message.sources)}
+                  </ReactMarkdown>
+                ) : message.content ? (
+                  // Still streaming - citations aren't available until
+                  // done, so render the raw text as it arrives.
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {message.content}
                   </ReactMarkdown>
                 ) : (
                   <p>{pending ? "…" : ""}</p>
