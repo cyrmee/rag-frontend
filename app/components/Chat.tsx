@@ -55,6 +55,8 @@ import {
   FolderOpenIcon,
   MenuIcon,
   PencilIcon,
+  ReplyIcon,
+  RotateCcwIcon,
   SquareIcon,
   SquarePenIcon,
   Trash2Icon,
@@ -152,8 +154,12 @@ export default function Chat() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [selectionMenu, setSelectionMenu] = useState<{ text: string; top: number; left: number } | null>(
+    null
+  );
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Populated after mount only — reading localStorage during the initial
   // render would return different values on the server vs. the client and
@@ -179,6 +185,36 @@ export default function Chat() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Selecting text inside the transcript surfaces a floating "Reply" button
+  // near the selection, so quoting part of an earlier message into a
+  // follow-up doesn't require manually copying and retyping it.
+  useEffect(() => {
+    function handleSelectionChange() {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+        setSelectionMenu(null);
+        return;
+      }
+      const anchorNode = sel.anchorNode;
+      if (!anchorNode || !transcriptRef.current?.contains(anchorNode)) {
+        setSelectionMenu(null);
+        return;
+      }
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        setSelectionMenu(null);
+        return;
+      }
+      setSelectionMenu({
+        text: sel.toString(),
+        top: rect.top,
+        left: rect.left + rect.width / 2,
+      });
+    }
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
   }, []);
 
   // Persist the active session a moment after messages settle, instead of on
@@ -373,6 +409,32 @@ export default function Chat() {
     }
   }
 
+  // Re-asks the question paired with this response. Since there's no way to
+  // rewind just the backend's memory of that one turn, this starts a fresh
+  // conversation from the question that's being regenerated — same
+  // trade-off as editing a message.
+  async function handleRegenerate(responseId: string) {
+    if (pending) return;
+    const index = messages.findIndex((m) => m.id === responseId);
+    if (index <= 0) return;
+    const userMessage = messages[index - 1];
+    if (userMessage.role !== "user") return;
+    await runAsk(userMessage.content, messages.slice(0, index - 1), true);
+  }
+
+  function handleReplyToSelection() {
+    if (!selectionMenu) return;
+    const quote = selectionMenu.text
+      .trim()
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    setInput((prev) => (prev ? `${quote}\n\n${prev}` : `${quote}\n\n`));
+    window.getSelection()?.removeAllRanges();
+    setSelectionMenu(null);
+    textareaRef.current?.focus();
+  }
+
   const composer = (
     <form onSubmit={handleSubmit} className="w-full">
       <InputGroup
@@ -424,6 +486,23 @@ export default function Chat() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
+      {selectionMenu && (
+        <div
+          className="fixed z-50 -translate-x-1/2 -translate-y-full animate-in fade-in zoom-in-95 pb-2 duration-100"
+          style={{ top: selectionMenu.top, left: selectionMenu.left }}
+        >
+          <Button
+            variant="default"
+            size="sm"
+            className="rounded-full shadow-md"
+            onClick={handleReplyToSelection}
+          >
+            <ReplyIcon data-icon="inline-start" />
+            Reply
+          </Button>
+        </div>
+      )}
+
       <aside className="hidden w-72 shrink-0 border-r border-sidebar-border lg:flex">
         <SidebarContent
           history={history}
@@ -519,9 +598,12 @@ export default function Chat() {
               <>
                 <MessageScrollerProvider>
                   <MessageScroller className="min-h-0 flex-1 animate-in fade-in duration-300">
-                    <MessageScrollerViewport>
-                      <MessageScrollerContent className="mx-auto w-full max-w-2xl px-4 py-6">
-                        {messages.map((message) => (
+                    <MessageScrollerViewport onScroll={() => setSelectionMenu(null)}>
+                      <MessageScrollerContent
+                        ref={transcriptRef}
+                        className="mx-auto w-full max-w-2xl px-4 py-6"
+                      >
+                        {messages.map((message, index) => (
                           <MessageScrollerItem
                             key={message.id}
                             messageId={message.id}
@@ -531,7 +613,9 @@ export default function Chat() {
                             <ChatMessageRow
                               message={message}
                               pending={pending}
+                              isLast={index === messages.length - 1}
                               onCopy={handleCopy}
+                              onRegenerate={handleRegenerate}
                               isEditing={editingId === message.id}
                               editValue={editValue}
                               onEditValueChange={setEditValue}
@@ -711,7 +795,9 @@ function CopyButton({
 function ChatMessageRow({
   message,
   pending,
+  isLast,
   onCopy,
+  onRegenerate,
   isEditing,
   editValue,
   onEditValueChange,
@@ -722,7 +808,9 @@ function ChatMessageRow({
 }: {
   message: ChatMessage;
   pending: boolean;
+  isLast: boolean;
   onCopy: (content: string) => void;
+  onRegenerate: (id: string) => void;
   isEditing: boolean;
   editValue: string;
   onEditValueChange: (value: string) => void;
@@ -818,6 +906,19 @@ function ChatMessageRow({
           <Bubble variant="destructive" role="alert">
             <BubbleContent>{message.content}</BubbleContent>
           </Bubble>
+          {isLast && !pending && (
+            <MessageFooter>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => onRegenerate(message.id)}
+                aria-label="Try again"
+                title="Try again"
+              >
+                <RotateCcwIcon />
+              </Button>
+            </MessageFooter>
+          )}
         </MessageContent>
       </Message>
     );
@@ -898,6 +999,17 @@ function ChatMessageRow({
         {!isStreaming && message.content && (
           <MessageFooter className="translate-y-0.5 opacity-0 transition-[opacity,transform] duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover/message:translate-y-0 group-hover/message:opacity-100">
             <CopyButton content={message.content} onCopy={onCopy} label="Copy answer" />
+            {isLast && !pending && (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => onRegenerate(message.id)}
+                aria-label="Regenerate response"
+                title="Regenerate response"
+              >
+                <RotateCcwIcon />
+              </Button>
+            )}
           </MessageFooter>
         )}
 
