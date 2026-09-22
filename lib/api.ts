@@ -115,14 +115,26 @@ export type AskStreamHandlers = {
   onDone?: (
     sources: AskSource[],
     conversationId: string | undefined,
-    citations: CitationSegment[]
+    citations: CitationSegment[],
+    userMessageId: string | undefined,
+    assistantMessageId: string | undefined,
+    title: string | undefined
   ) => void;
   onError?: (message: string) => void;
 };
 
 export async function streamAsk(
   question: string,
-  options: { maxIterations?: number; conversationId?: string },
+  options: {
+    maxIterations?: number;
+    conversationId?: string;
+    // The message this turn should attach under. Omit to continue the
+    // conversation normally (the backend uses its current tip). Pass ""
+    // to branch from before the very first message (editing/regenerating
+    // it), or an earlier message's id to branch from anywhere else - see
+    // AskRequest.parent_message_id on the backend.
+    parentMessageId?: string;
+  },
   handlers: AskStreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
@@ -140,6 +152,7 @@ export async function streamAsk(
     body: JSON.stringify({
       question,
       conversation_id: options.conversationId,
+      parent_message_id: options.parentMessageId,
     }),
     signal,
   });
@@ -198,7 +211,10 @@ export async function streamAsk(
             ? payload.citations
                 .map(normalizeCitationSegment)
                 .filter((s): s is CitationSegment => s !== null)
-            : []
+            : [],
+          typeof payload.user_message_id === "string" ? payload.user_message_id : undefined,
+          typeof payload.assistant_message_id === "string" ? payload.assistant_message_id : undefined,
+          typeof payload.title === "string" ? payload.title : undefined
         );
         break;
       case "error":

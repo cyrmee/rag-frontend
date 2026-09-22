@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type AnchorHTMLAttributes } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type AnchorHTMLAttributes } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { streamAsk, type AskSource, type CitationSegment } from "@/lib/api";
 import {
   deleteConversation,
+  getActivePath,
+  getLatestDescendantLeaf,
+  getSiblings,
   loadConversations,
   saveConversation,
   titleFromQuestion,
@@ -50,10 +53,13 @@ import {
   ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CopyIcon,
   FolderOpenIcon,
   MenuIcon,
   PencilIcon,
+  RotateCcwIcon,
   SquareIcon,
   SquarePenIcon,
   Trash2Icon,
@@ -140,13 +146,26 @@ export default function Chat() {
   // and trigger a hydration mismatch.
   const initialSessionId = useId();
   const [sessionId, setSessionId] = useState(initialSessionId);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // The conversation tree: every message ever created (not just the
+  // active branch) plus which leaf is currently shown. `messages` below
+  // derives the rendered transcript by walking parentId from activeLeafId.
+  const [nodes, setNodes] = useState<Record<string, ChatMessage>>({});
+  const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>(
     undefined
   );
+  // Only set once, right after a brand-new conversation's first turn
+  // completes (see runAsk's onDone) - overrides the client-side
+  // titleFromQuestion() guess with the backend's generated title.
+  const [serverTitle, setServerTitle] = useState<string | undefined>(undefined);
   const [history, setHistory] = useState<StoredConversation[]>([]);
+
+  const messages = useMemo(
+    () => getActivePath({ nodes, activeLeafId }),
+    [nodes, activeLeafId]
+  );
   const [docsOpen, setDocsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -189,43 +208,51 @@ export default function Chat() {
     const timeout = setTimeout(() => {
       saveConversation({
         id: sessionId,
-        title: titleFromQuestion(firstUser.content),
+        title: serverTitle ?? titleFromQuestion(firstUser.content),
         updatedAt: Date.now(),
         conversationId,
-        messages,
+        nodes,
+        activeLeafId,
       });
       setHistory(loadConversations());
     }, 400);
     return () => clearTimeout(timeout);
-  }, [messages, conversationId, sessionId]);
+  }, [messages, nodes, activeLeafId, conversationId, sessionId, serverTitle]);
 
-  // Shared by a normal send and an edited/rebranched turn. `priorMessages` is
-  // everything that should stay in the transcript before this question;
-  // `startFresh` drops the server-side conversation memory, since branching
-  // from an earlier point means the backend's linear history no longer
-  // matches what the user sees.
-  async function runAsk(
-    question: string,
-    priorMessages: ChatMessage[],
-    startFresh: boolean
-  ) {
+  // Shared by a normal send, an edited question, and a regenerated answer.
+  // `parentId` is the tree node the new user turn attaches under - null
+  // for the conversation root (its first message), an existing node's id
+  // to branch from there. A normal send passes the current activeLeafId
+  // (or null for a brand-new conversation); editing/regenerating passes
+  // the edited/regenerated message's own parentId, so the new turn becomes
+  // a sibling of what's already there instead of replacing it.
+  async function runAsk(question: string, parentId: string | null) {
     if (!question || pending) return;
 
-    const assistantId = makeId();
+    const tempUserId = makeId();
+    const tempAssistantId = makeId();
     const now = Date.now();
-    setMessages([
-      ...priorMessages,
-      { id: makeId(), role: "user", content: question, createdAt: now },
-      { id: assistantId, role: "assistant", content: "", toolEvents: [], createdAt: now },
-    ]);
+    setNodes((prev) => ({
+      ...prev,
+      [tempUserId]: { id: tempUserId, parentId, role: "user", content: question, createdAt: now },
+      [tempAssistantId]: {
+        id: tempAssistantId,
+        parentId: tempUserId,
+        role: "assistant",
+        content: "",
+        toolEvents: [],
+        createdAt: now,
+      },
+    }));
+    setActiveLeafId(tempAssistantId);
     setPending(true);
-    const activeConversationId = startFresh ? undefined : conversationId;
-    if (startFresh) setConversationId(undefined);
 
     function updateAssistant(patch: (message: ChatMessage) => ChatMessage) {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantId ? patch(m) : m))
-      );
+      setNodes((prev) => {
+        const existing = prev[tempAssistantId];
+        if (!existing) return prev;
+        return { ...prev, [tempAssistantId]: patch(existing) };
+      });
     }
 
     const controller = new AbortController();
@@ -234,7 +261,7 @@ export default function Chat() {
     try {
       await streamAsk(
         question,
-        { conversationId: activeConversationId },
+        { conversationId, parentMessageId: parentId ?? "" },
         {
           onThinking: (token) => {
             updateAssistant((m) => ({
@@ -263,9 +290,33 @@ export default function Chat() {
               ],
             }));
           },
-          onDone: (sources, nextConversationId, citations) => {
-            updateAssistant((m) => ({ ...m, sources, citations }));
+          onDone: (sources, nextConversationId, citations, userMessageId, assistantMessageId, title) => {
+            // Rekey the temporary local ids to the backend's real message
+            // ids, so a later edit/regenerate/branch-switch can reference
+            // this turn correctly.
+            setNodes((prev) => {
+              const next = { ...prev };
+              const userNode = next[tempUserId];
+              const assistantNode = next[tempAssistantId];
+              delete next[tempUserId];
+              delete next[tempAssistantId];
+              if (userNode && userMessageId) {
+                next[userMessageId] = { ...userNode, id: userMessageId };
+              }
+              if (assistantNode && assistantMessageId) {
+                next[assistantMessageId] = {
+                  ...assistantNode,
+                  id: assistantMessageId,
+                  parentId: userMessageId ?? assistantNode.parentId,
+                  sources,
+                  citations,
+                };
+              }
+              return next;
+            });
+            if (assistantMessageId) setActiveLeafId(assistantMessageId);
             if (nextConversationId) setConversationId(nextConversationId);
+            if (title) setServerTitle(title);
           },
           onError: (message) => {
             updateAssistant((m) => ({ ...m, role: "error", content: message }));
@@ -292,23 +343,35 @@ export default function Chat() {
     const question = input.trim();
     if (!question || pending) return;
     setInput("");
-    await runAsk(question, messages, false);
+    await runAsk(question, activeLeafId);
   }
 
   function handleStop() {
     abortRef.current?.abort();
   }
 
+  // Removes a message and everything under it in the tree (its reply, and
+  // anything that continued from there), not just the next array entry -
+  // a node can have more than one child once branching is in play.
   function handleDeletePair(userMessageId: string) {
-    setMessages((prev) => {
-      const index = prev.findIndex((m) => m.id === userMessageId);
-      if (index === -1) return prev;
-      const nextRole = prev[index + 1]?.role;
-      const hasPairedResponse = nextRole === "assistant" || nextRole === "error";
-      return prev.filter(
-        (_, i) => i !== index && !(hasPairedResponse && i === index + 1)
-      );
-    });
+    const deletedNode = nodes[userMessageId];
+    if (!deletedNode) return;
+    const toDelete = new Set<string>();
+    const stack = [userMessageId];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (toDelete.has(id)) continue;
+      toDelete.add(id);
+      for (const m of Object.values(nodes)) {
+        if (m.parentId === id) stack.push(m.id);
+      }
+    }
+    const next = { ...nodes };
+    for (const id of toDelete) delete next[id];
+    setNodes(next);
+    if (activeLeafId && toDelete.has(activeLeafId)) {
+      setActiveLeafId(deletedNode.parentId);
+    }
   }
 
   function handleStartEdit(id: string, content: string) {
@@ -326,18 +389,34 @@ export default function Chat() {
   async function handleSubmitEdit(id: string) {
     const question = editValue.trim();
     if (!question) return;
-    const index = messages.findIndex((m) => m.id === id);
-    if (index === -1) return;
-    const priorMessages = messages.slice(0, index);
+    const node = nodes[id];
+    if (!node) return;
     setEditingId(null);
     setEditValue("");
-    await runAsk(question, priorMessages, true);
+    await runAsk(question, node.parentId);
+  }
+
+  // Regenerating re-asks the same question that produced this answer, as
+  // a new sibling branch under the same parent - the old answer stays
+  // reachable via the branch switcher rather than being overwritten.
+  async function handleRegenerate(assistantId: string) {
+    const assistantNode = nodes[assistantId];
+    const userNode = assistantNode?.parentId ? nodes[assistantNode.parentId] : undefined;
+    if (!userNode) return;
+    await runAsk(userNode.content, userNode.parentId);
+  }
+
+  function handleSwitchBranch(siblingId: string) {
+    if (pending) return;
+    setActiveLeafId(getLatestDescendantLeaf({ nodes }, siblingId));
   }
 
   function handleNewConversation() {
     abortRef.current?.abort();
-    setMessages([]);
+    setNodes({});
+    setActiveLeafId(null);
     setConversationId(undefined);
+    setServerTitle(undefined);
     setPending(false);
     setSessionId(makeId());
     setMobileNavOpen(false);
@@ -346,8 +425,10 @@ export default function Chat() {
   function handleSelectConversation(stored: StoredConversation) {
     abortRef.current?.abort();
     setSessionId(stored.id);
-    setMessages(stored.messages);
+    setNodes(stored.nodes);
+    setActiveLeafId(stored.activeLeafId);
     setConversationId(stored.conversationId);
+    setServerTitle(stored.title);
     setPending(false);
     setMobileNavOpen(false);
   }
@@ -357,8 +438,10 @@ export default function Chat() {
     deleteConversation(id);
     setHistory((prev) => prev.filter((c) => c.id !== id));
     if (id === sessionId) {
-      setMessages([]);
+      setNodes({});
+      setActiveLeafId(null);
       setConversationId(undefined);
+      setServerTitle(undefined);
       setSessionId(makeId());
     }
   }
@@ -515,6 +598,9 @@ export default function Chat() {
                           onCancelEdit={handleCancelEdit}
                           onSubmitEdit={handleSubmitEdit}
                           onDelete={handleDeletePair}
+                          onRegenerate={handleRegenerate}
+                          siblings={message.role === "user" ? getSiblings({ nodes }, message.id) : []}
+                          onSwitchBranch={handleSwitchBranch}
                         />
                       </MessageScrollerItem>
                     ))}
@@ -681,6 +767,50 @@ function CopyButton({
   );
 }
 
+// "‹ 2/3 ›" control for cycling between alternate versions of a question
+// (an edit, or the question a regenerated answer re-asked) at the same
+// branch point. Hidden entirely when there's nothing to switch between.
+function BranchSwitcher({
+  siblings,
+  activeId,
+  pending,
+  onSwitch,
+}: {
+  siblings: ChatMessage[];
+  activeId: string;
+  pending: boolean;
+  onSwitch: (id: string) => void;
+}) {
+  if (siblings.length < 2) return null;
+  const index = siblings.findIndex((s) => s.id === activeId);
+  const current = index === -1 ? 0 : index;
+  return (
+    <div className="flex items-center gap-0.5 text-xs text-muted-foreground">
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        onClick={() => onSwitch(siblings[Math.max(current - 1, 0)].id)}
+        disabled={pending || current === 0}
+        aria-label="Previous version"
+      >
+        <ChevronLeftIcon />
+      </Button>
+      <span className="tabular-nums">
+        {current + 1}/{siblings.length}
+      </span>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        disabled={pending || current === siblings.length - 1}
+        onClick={() => onSwitch(siblings[Math.min(current + 1, siblings.length - 1)].id)}
+        aria-label="Next version"
+      >
+        <ChevronRightIcon />
+      </Button>
+    </div>
+  );
+}
+
 function ChatMessageRow({
   message,
   pending,
@@ -692,6 +822,9 @@ function ChatMessageRow({
   onCancelEdit,
   onSubmitEdit,
   onDelete,
+  onRegenerate,
+  siblings,
+  onSwitchBranch,
 }: {
   message: ChatMessage;
   pending: boolean;
@@ -703,6 +836,9 @@ function ChatMessageRow({
   onCancelEdit: () => void;
   onSubmitEdit: (id: string) => void;
   onDelete: (id: string) => void;
+  onRegenerate: (assistantMessageId: string) => void;
+  siblings: ChatMessage[];
+  onSwitchBranch: (siblingId: string) => void;
 }) {
   // Captured once at mount so a later change in `pending` (this message
   // finishing its stream) doesn't fight the Collapsible's own open state.
@@ -758,26 +894,29 @@ function ChatMessageRow({
               {message.content}
             </BubbleContent>
           </Bubble>
-          <MessageFooter className="translate-y-0.5 justify-end gap-0.5 opacity-0 transition-[opacity,transform] duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover/message:translate-y-0 group-hover/message:opacity-100">
-            <CopyButton content={message.content} onCopy={onCopy} label="Copy question" />
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => onStartEdit(message.id, message.content)}
-              aria-label="Edit question"
-              title="Edit question"
-            >
-              <PencilIcon />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => onDelete(message.id)}
-              aria-label="Delete question"
-              title="Delete question"
-            >
-              <Trash2Icon />
-            </Button>
+          <MessageFooter className="justify-end gap-1">
+            <BranchSwitcher siblings={siblings} activeId={message.id} pending={pending} onSwitch={onSwitchBranch} />
+            <div className="flex translate-y-0.5 gap-0.5 opacity-0 transition-[opacity,transform] duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover/message:translate-y-0 group-hover/message:opacity-100">
+              <CopyButton content={message.content} onCopy={onCopy} label="Copy question" />
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => onStartEdit(message.id, message.content)}
+                aria-label="Edit question"
+                title="Edit question"
+              >
+                <PencilIcon />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => onDelete(message.id)}
+                aria-label="Delete question"
+                title="Delete question"
+              >
+                <Trash2Icon />
+              </Button>
+            </div>
           </MessageFooter>
         </MessageContent>
       </Message>
@@ -871,6 +1010,16 @@ function ChatMessageRow({
         {!isStreaming && message.content && (
           <MessageFooter className="translate-y-0.5 opacity-0 transition-[opacity,transform] duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover/message:translate-y-0 group-hover/message:opacity-100">
             <CopyButton content={message.content} onCopy={onCopy} label="Copy answer" />
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => onRegenerate(message.id)}
+              disabled={pending}
+              aria-label="Regenerate answer"
+              title="Regenerate answer"
+            >
+              <RotateCcwIcon />
+            </Button>
           </MessageFooter>
         )}
 
