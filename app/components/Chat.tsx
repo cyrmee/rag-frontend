@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type AnchorHTMLAttributes } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { streamAsk } from "@/lib/api";
+import { streamAsk, type AskSource, type CitationSegment } from "@/lib/api";
 import {
   deleteConversation,
   loadConversations,
@@ -59,6 +59,16 @@ import {
   Trash2Icon,
 } from "lucide-react";
 
+// Citation links (and any other link the model's markdown happens to
+// produce) open in a new tab rather than navigating away from the chat.
+const markdownComponents = {
+  a: ({ href, title, children }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} title={title} target="_blank" rel="noreferrer noopener" className="chat-citation-link">
+      {children}
+    </a>
+  ),
+};
+
 function makeId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -73,6 +83,35 @@ function formatArgs(args: unknown): string {
   } catch {
     return String(args);
   }
+}
+
+// `citations` (from the done event) is the structured breakdown — each
+// segment's [N] markers are already stripped, replaced by source_indices
+// (1-based into `sources`). Rebuilds one markdown string: each segment's
+// text gets a real markdown link appended per citation index (title =
+// filename, for a hover tooltip; an index with no matching source, or a
+// source with no document_url, falls back to plain "[N]" text rather than
+// a dead link), then every segment is rejoined with "\n" — an empty
+// segment (a paragraph break marker) naturally reconstructs the original
+// blank line this way, so paragraphs/lists come back exactly as the model
+// wrote them. Only feed this to ReactMarkdown as one combined string, not
+// one call per segment — a lone "* item" line rendered in isolation loses
+// its sibling list items.
+function buildCitedMarkdown(citations: CitationSegment[], sources: AskSource[] | undefined): string {
+  return citations
+    .map((segment) => {
+      if (segment.source_indices.length === 0) return segment.text;
+      const links = segment.source_indices
+        .map((idx) => {
+          const source = sources?.[idx - 1];
+          if (!source?.document_url) return `[${idx}]`;
+          const title = (source.filename ?? "").replace(/"/g, "'");
+          return `[[${idx}]](${source.document_url} "${title}")`;
+        })
+        .join("");
+      return `${segment.text} ${links}`;
+    })
+    .join("\n");
 }
 
 // page_number means something different per format: a real page (pdf), a
@@ -195,7 +234,7 @@ export default function Chat() {
     try {
       await streamAsk(
         question,
-        activeConversationId,
+        { conversationId: activeConversationId },
         {
           onThinking: (token) => {
             updateAssistant((m) => ({
@@ -224,8 +263,8 @@ export default function Chat() {
               ],
             }));
           },
-          onDone: (sources, nextConversationId) => {
-            updateAssistant((m) => ({ ...m, sources }));
+          onDone: (sources, nextConversationId, citations) => {
+            updateAssistant((m) => ({ ...m, sources, citations }));
             if (nextConversationId) setConversationId(nextConversationId);
           },
           onError: (message) => {
@@ -809,9 +848,21 @@ function ChatMessageRow({
           <Bubble variant="ghost">
             <BubbleContent>
               <div className="chat-markdown">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {message.content}
-                </ReactMarkdown>
+                {message.citations && message.citations.length > 0 ? (
+                  // Answer is complete: render the clean, structured
+                  // citation breakdown rather than the raw streamed text
+                  // (which may still contain literal "[N]" markers as the
+                  // model generated them).
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {buildCitedMarkdown(message.citations, message.sources)}
+                  </ReactMarkdown>
+                ) : (
+                  // Still streaming, or the answer had no citations —
+                  // render the raw text as-is.
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {message.content}
+                  </ReactMarkdown>
+                )}
               </div>
             </BubbleContent>
           </Bubble>

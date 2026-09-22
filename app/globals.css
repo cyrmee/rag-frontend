@@ -327,3 +327,21 @@ body {
   border-top: 1px solid var(--border);
   margin: 0.9em 0;
 }
+
+/* Inline per-sentence citation markers, e.g. "...AES-256 encryption [7]."
+   linked to the matching entry in the Sources list below — same color
+   family as the source pills so the connection between the two reads
+   clearly, but small/raised so it doesn't compete with the sentence. */
+.chat-citation-link {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-grounded-fg);
+  text-decoration: none;
+  vertical-align: super;
+  line-height: 1;
+  padding: 0 1px;
+}
+
+.chat-citation-link:hover {
+  text-decoration: underline;
+}

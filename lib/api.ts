@@ -83,29 +83,64 @@ function normalizeSource(raw: unknown): AskSource {
   return {};
 }
 
+// The clean, structured citation breakdown - see app/agent.py's
+// _segment_citations(). source_indices are 1-based positions into the
+// `sources` array from the same done event (index N -> sources[N-1]).
+// An empty-text segment ({text: "", source_indices: []}) marks a
+// paragraph break in the original answer - rejoining segment text with
+// "\n" reconstructs the original paragraph/list structure exactly (a
+// single "\n" between real segments is just a soft wrap in CommonMark;
+// an empty segment between two real ones produces the blank line needed
+// to start a new paragraph/list).
+export type CitationSegment = {
+  text: string;
+  source_indices: number[];
+};
+
+function normalizeCitationSegment(raw: unknown): CitationSegment | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.text !== "string") return null;
+  const indices = Array.isArray(obj.source_indices)
+    ? obj.source_indices.filter((n): n is number => typeof n === "number")
+    : [];
+  return { text: obj.text, source_indices: indices };
+}
+
 export type AskStreamHandlers = {
   onThinking?: (token: string) => void;
   onAnswer?: (token: string) => void;
   onToolCall?: (name: string, args: unknown) => void;
   onToolResult?: (name: string, preview: string) => void;
-  onDone?: (sources: AskSource[], conversationId: string | undefined) => void;
+  onDone?: (
+    sources: AskSource[],
+    conversationId: string | undefined,
+    citations: CitationSegment[]
+  ) => void;
   onError?: (message: string) => void;
 };
 
 export async function streamAsk(
   question: string,
-  conversationId: string | undefined,
+  options: { maxIterations?: number; conversationId?: string },
   handlers: AskStreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
+  // The backend is always agentic and always streamed now - there's a
+  // single POST /ask, not separate /ask/stream and /ask/agentic/stream
+  // routes.
   const url = new URL("/ask", API_BASE);
+  if (options.maxIterations) {
+    url.searchParams.set("max_iterations", String(options.maxIterations));
+  }
 
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(
-      conversationId ? { question, conversation_id: conversationId } : { question }
-    ),
+    body: JSON.stringify({
+      question,
+      conversation_id: options.conversationId,
+    }),
     signal,
   });
 
@@ -158,7 +193,12 @@ export async function streamAsk(
             : [],
           typeof payload.conversation_id === "string"
             ? payload.conversation_id
-            : undefined
+            : undefined,
+          Array.isArray(payload.citations)
+            ? payload.citations
+                .map(normalizeCitationSegment)
+                .filter((s): s is CitationSegment => s !== null)
+            : []
         );
         break;
       case "error":

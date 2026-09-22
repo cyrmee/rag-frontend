@@ -1,4 +1,4 @@
-import type { AskSource } from "@/lib/api";
+import type { AskSource, CitationSegment } from "@/lib/api";
 
 export type ToolEvent = {
   id: string;
@@ -13,6 +13,7 @@ export type ChatMessage = {
   content: string;
   thinking?: string;
   sources?: AskSource[];
+  citations?: CitationSegment[];
   toolEvents?: ToolEvent[];
   createdAt: number;
 };
