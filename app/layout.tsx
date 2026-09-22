@@ -10,9 +10,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Fayda Anbabi",
+  title: "Fayda አንባቢ",
   description:
-    "Fayda Anbabi (Amharic: reader) — upload your documents, then ask questions answered from what you've uploaded.",
+    "Fayda አንባቢ (Amharic: reader) — upload your documents, then ask questions answered from what you've uploaded.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

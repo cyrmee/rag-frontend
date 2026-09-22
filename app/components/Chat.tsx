@@ -468,7 +468,7 @@ export default function Chat() {
               <MenuIcon />
             </Button>
             <span className="text-sm font-semibold tracking-tight text-foreground">
-              ፋይዳ አንባቢ
+              Fayda አንባቢ
             </span>
           </div>
           <Button
@@ -486,7 +486,7 @@ export default function Chat() {
           <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-24">
             <Empty className="border-none p-0">
               <EmptyTitle className="text-2xl font-semibold">
-                What should Anbabi read for you?
+                What should አንባቢ read for you?
               </EmptyTitle>
             </Empty>
             <div className="w-full max-w-2xl">{composer}</div>
@@ -569,7 +569,7 @@ function SidebarContent({
           className="rounded-full"
         />
         <span className="flex items-center gap-1.5 text-sm font-semibold tracking-tight text-white">
-          ፋይዳ አንባቢ
+          Fayda አንባቢ
           <span
             aria-hidden="true"
             className="size-1.5 rounded-full bg-signal-gold"
