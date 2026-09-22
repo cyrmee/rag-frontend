@@ -59,11 +59,14 @@ function formatUnit(sourceFormat: string | undefined, pageNumber: number | null 
 export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [agentic, setAgentic] = useState(true);
   const [maxIterations, setMaxIterations] = useState(5);
   const [pending, setPending] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Set from the first response's done event, then reused for every
+  // subsequent question so the backend treats this as one continuing
+  // conversation (see GET /conversations/{id} to inspect it later).
+  const conversationIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -102,7 +105,7 @@ export default function Chat() {
     try {
       await streamAsk(
         question,
-        { agentic, maxIterations: agentic ? maxIterations : undefined },
+        { maxIterations, conversationId: conversationIdRef.current },
         {
           onThinking: (token) => {
             updateAssistant((m) => ({
@@ -134,7 +137,8 @@ export default function Chat() {
             }));
             scrollToBottom();
           },
-          onDone: (sources) => {
+          onDone: (sources, conversationId) => {
+            if (conversationId) conversationIdRef.current = conversationId;
             updateAssistant((m) => ({ ...m, sources }));
           },
           onError: (message) => {
@@ -160,27 +164,17 @@ export default function Chat() {
     <div className="major-surface chat-panel">
       <div className="chat-toolbar">
         <label className="chat-toggle">
+          Max iterations
           <input
-            type="checkbox"
-            checked={agentic}
-            onChange={(e) => setAgentic(e.target.checked)}
+            type="number"
+            min={1}
+            max={10}
+            value={maxIterations}
+            onChange={(e) => setMaxIterations(Number(e.target.value))}
+            className="chat-iterations"
+            aria-label="Maximum retrieval iterations"
           />
-          Agentic retrieval
         </label>
-        {agentic && (
-          <label className="chat-toggle">
-            Max iterations
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={maxIterations}
-              onChange={(e) => setMaxIterations(Number(e.target.value))}
-              className="chat-iterations"
-              aria-label="Maximum retrieval iterations"
-            />
-          </label>
-        )}
       </div>
 
       <div

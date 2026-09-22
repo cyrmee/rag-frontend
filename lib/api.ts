@@ -88,26 +88,31 @@ export type AskStreamHandlers = {
   onAnswer?: (token: string) => void;
   onToolCall?: (name: string, args: unknown) => void;
   onToolResult?: (name: string, preview: string) => void;
-  onDone?: (sources: AskSource[]) => void;
+  onDone?: (sources: AskSource[], conversationId?: string) => void;
   onError?: (message: string) => void;
 };
 
 export async function streamAsk(
   question: string,
-  options: { agentic?: boolean; maxIterations?: number },
+  options: { maxIterations?: number; conversationId?: string },
   handlers: AskStreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
-  const path = options.agentic ? "/ask/agentic/stream" : "/ask/stream";
-  const url = new URL(path, API_BASE);
-  if (options.agentic && options.maxIterations) {
+  // The backend is always agentic and always streamed now - there's a
+  // single POST /ask, not separate /ask/stream and /ask/agentic/stream
+  // routes.
+  const url = new URL("/ask", API_BASE);
+  if (options.maxIterations) {
     url.searchParams.set("max_iterations", String(options.maxIterations));
   }
 
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({
+      question,
+      conversation_id: options.conversationId,
+    }),
     signal,
   });
 
@@ -157,7 +162,10 @@ export async function streamAsk(
         handlers.onDone?.(
           Array.isArray(payload.sources)
             ? payload.sources.map(normalizeSource)
-            : []
+            : [],
+          typeof payload.conversation_id === "string"
+            ? payload.conversation_id
+            : undefined
         );
         break;
       case "error":
