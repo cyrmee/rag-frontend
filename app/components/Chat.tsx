@@ -47,6 +47,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import {
+  ArrowLeftIcon,
   ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -427,6 +428,7 @@ export default function Chat() {
         <SidebarContent
           history={history}
           sessionId={sessionId}
+          sourcesActive={docsOpen}
           onNewConversation={handleNewConversation}
           onSelectConversation={handleSelectConversation}
           onDeleteConversation={handleDeleteConversation}
@@ -445,6 +447,7 @@ export default function Chat() {
           <SidebarContent
             history={history}
             sessionId={sessionId}
+            sourcesActive={docsOpen}
             onNewConversation={handleNewConversation}
             onSelectConversation={handleSelectConversation}
             onDeleteConversation={handleDeleteConversation}
@@ -457,87 +460,101 @@ export default function Chat() {
       </Sheet>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 lg:hidden">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setMobileNavOpen(true)}
-              aria-label="Open menu"
-            >
-              <MenuIcon />
-            </Button>
-            <span className="text-sm font-semibold tracking-tight text-foreground">
-              Fayda አንባቢ
-            </span>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={handleNewConversation}
-            disabled={messages.length === 0}
-            aria-label="New chat"
-          >
-            <SquarePenIcon />
-          </Button>
-        </div>
-
-        {messages.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-24">
-            <Empty className="border-none p-0">
-              <EmptyTitle className="text-2xl font-semibold">
-                What should አንባቢ read for you?
-              </EmptyTitle>
-            </Empty>
-            <div className="w-full max-w-2xl">{composer}</div>
-          </div>
+        {docsOpen ? (
+          <>
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setDocsOpen(false)}
+                aria-label="Back to chat"
+              >
+                <ArrowLeftIcon />
+              </Button>
+              <span className="text-sm font-semibold tracking-tight text-foreground lg:hidden">
+                Sources
+              </span>
+            </div>
+            <div className="min-h-0 flex-1 animate-in fade-in overflow-y-auto duration-200">
+              <DocumentPanel />
+            </div>
+          </>
         ) : (
           <>
-            <MessageScrollerProvider>
-              <MessageScroller className="min-h-0 flex-1 animate-in fade-in duration-300">
-                <MessageScrollerViewport>
-                  <MessageScrollerContent className="mx-auto w-full max-w-2xl px-4 py-6">
-                    {messages.map((message) => (
-                      <MessageScrollerItem
-                        key={message.id}
-                        messageId={message.id}
-                        scrollAnchor={message.role === "user"}
-                        className="animate-in fade-in slide-in-from-bottom-2 duration-300 fill-mode-both"
-                      >
-                        <ChatMessageRow
-                          message={message}
-                          pending={pending}
-                          onCopy={handleCopy}
-                          isEditing={editingId === message.id}
-                          editValue={editValue}
-                          onEditValueChange={setEditValue}
-                          onStartEdit={handleStartEdit}
-                          onCancelEdit={handleCancelEdit}
-                          onSubmitEdit={handleSubmitEdit}
-                          onDelete={handleDeletePair}
-                        />
-                      </MessageScrollerItem>
-                    ))}
-                  </MessageScrollerContent>
-                </MessageScrollerViewport>
-                <MessageScrollerButton />
-              </MessageScroller>
-            </MessageScrollerProvider>
-            <div className="shrink-0 animate-in fade-in px-4 pt-2 pb-6 duration-300">
-              <div className="mx-auto w-full max-w-2xl">{composer}</div>
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 lg:hidden">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setMobileNavOpen(true)}
+                  aria-label="Open menu"
+                >
+                  <MenuIcon />
+                </Button>
+                <span className="text-sm font-semibold tracking-tight text-foreground">
+                  Fayda አንባቢ
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={handleNewConversation}
+                disabled={messages.length === 0}
+                aria-label="New chat"
+              >
+                <SquarePenIcon />
+              </Button>
             </div>
+
+            {messages.length === 0 ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-24">
+                <Empty className="border-none p-0">
+                  <EmptyTitle className="text-2xl font-semibold">
+                    What should አንባቢ read for you?
+                  </EmptyTitle>
+                </Empty>
+                <div className="w-full max-w-2xl">{composer}</div>
+              </div>
+            ) : (
+              <>
+                <MessageScrollerProvider>
+                  <MessageScroller className="min-h-0 flex-1 animate-in fade-in duration-300">
+                    <MessageScrollerViewport>
+                      <MessageScrollerContent className="mx-auto w-full max-w-2xl px-4 py-6">
+                        {messages.map((message) => (
+                          <MessageScrollerItem
+                            key={message.id}
+                            messageId={message.id}
+                            scrollAnchor={message.role === "user"}
+                            className="animate-in fade-in slide-in-from-bottom-2 duration-300 fill-mode-both"
+                          >
+                            <ChatMessageRow
+                              message={message}
+                              pending={pending}
+                              onCopy={handleCopy}
+                              isEditing={editingId === message.id}
+                              editValue={editValue}
+                              onEditValueChange={setEditValue}
+                              onStartEdit={handleStartEdit}
+                              onCancelEdit={handleCancelEdit}
+                              onSubmitEdit={handleSubmitEdit}
+                              onDelete={handleDeletePair}
+                            />
+                          </MessageScrollerItem>
+                        ))}
+                      </MessageScrollerContent>
+                    </MessageScrollerViewport>
+                    <MessageScrollerButton />
+                  </MessageScroller>
+                </MessageScrollerProvider>
+                <div className="shrink-0 animate-in fade-in px-4 pt-2 pb-6 duration-300">
+                  <div className="mx-auto w-full max-w-2xl">{composer}</div>
+                </div>
+              </>
+            )}
           </>
         )}
       </div>
-
-      <Sheet open={docsOpen} onOpenChange={setDocsOpen}>
-        <SheetContent className="flex w-full flex-col gap-0 p-4 sm:max-w-md">
-          <SheetHeader className="sr-only">
-            <SheetTitle>Sources</SheetTitle>
-          </SheetHeader>
-          <DocumentPanel />
-        </SheetContent>
-      </Sheet>
     </div>
   );
 }
@@ -545,6 +562,7 @@ export default function Chat() {
 function SidebarContent({
   history,
   sessionId,
+  sourcesActive,
   onNewConversation,
   onSelectConversation,
   onDeleteConversation,
@@ -552,6 +570,7 @@ function SidebarContent({
 }: {
   history: StoredConversation[];
   sessionId: string;
+  sourcesActive: boolean;
   onNewConversation: () => void;
   onSelectConversation: (stored: StoredConversation) => void;
   onDeleteConversation: (id: string, e: React.MouseEvent) => void;
@@ -579,7 +598,12 @@ function SidebarContent({
 
       <div className="mt-1 flex flex-col gap-0.5">
         <SidebarItem icon={SquarePenIcon} label="New chat" onClick={onNewConversation} />
-        <SidebarItem icon={FolderOpenIcon} label="Sources" onClick={onOpenSources} />
+        <SidebarItem
+          icon={FolderOpenIcon}
+          label="Sources"
+          onClick={onOpenSources}
+          active={sourcesActive}
+        />
       </div>
 
       <div className="sidebar-scroll mt-5 flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -632,16 +656,19 @@ function SidebarItem({
   icon: Icon,
   label,
   onClick,
+  active,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   onClick: () => void;
+  active?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2.5 rounded-full px-3 py-2 text-left text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98]"
+      data-active={active}
+      className="flex items-center gap-2.5 rounded-full px-3 py-2 text-left text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[oklch(from_var(--color-signal-gold)_l_c_h_/_0.2)]"
     >
       <Icon className="size-4 shrink-0 text-sidebar-foreground/70" />
       {label}
