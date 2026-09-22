@@ -122,7 +122,10 @@ export type AskStreamHandlers = {
 
 export async function streamAsk(
   question: string,
-  options: { maxIterations?: number; conversationId?: string },
+  // `webSearch` isn't live on the backend yet - included here so the
+  // frontend already sends it once /ask supports it; harmless (ignored)
+  // until then.
+  options: { maxIterations?: number; conversationId?: string; webSearch?: boolean },
   handlers: AskStreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
@@ -140,6 +143,7 @@ export async function streamAsk(
     body: JSON.stringify({
       question,
       conversation_id: options.conversationId,
+      ...(options.webSearch ? { web_search: true } : {}),
     }),
     signal,
   });

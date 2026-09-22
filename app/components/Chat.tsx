@@ -60,6 +60,7 @@ import {
   ChevronDownIcon,
   CopyIcon,
   FolderOpenIcon,
+  GlobeIcon,
   MenuIcon,
   MicIcon,
   PaperclipIcon,
@@ -191,6 +192,7 @@ export default function Chat() {
     null
   );
   const [listening, setListening] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -312,7 +314,7 @@ export default function Chat() {
     try {
       await streamAsk(
         question,
-        { conversationId: activeConversationId },
+        { conversationId: activeConversationId, webSearch: webSearchEnabled },
         {
           onThinking: (token) => {
             updateAssistant((m) => ({
@@ -569,21 +571,34 @@ export default function Chat() {
           disabled={pending}
         />
         <InputGroupAddon align="block-end" className="justify-between px-1.5 pb-1.5">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<InputGroupButton variant="ghost" size="icon-sm" aria-label="Add files" />}
+          <div className="flex items-center gap-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<InputGroupButton variant="ghost" size="icon-sm" aria-label="Add files" />}
+              >
+                <PlusIcon />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="start">
+                <DropdownMenuGroup>
+                  <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
+                    <PaperclipIcon data-icon="inline-start" />
+                    Add files
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <InputGroupButton
+              type="button"
+              variant={webSearchEnabled ? "default" : "outline"}
+              size="sm"
+              onClick={() => setWebSearchEnabled((v) => !v)}
+              aria-pressed={webSearchEnabled}
+              className="gap-1.5 rounded-full"
             >
-              <PlusIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent side="top" align="start">
-              <DropdownMenuGroup>
-                <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
-                  <PaperclipIcon data-icon="inline-start" />
-                  Add files
-                </DropdownMenuItem>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+              <GlobeIcon data-icon="inline-start" />
+              <span className="hidden sm:inline">Search the web</span>
+            </InputGroupButton>
+          </div>
           <input
             ref={attachInputRef}
             type="file"
