@@ -250,7 +250,7 @@ export default function DocumentPanel() {
 
       <div
         data-active={dragActive}
-        className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-border bg-card px-6 py-10 text-center transition-colors data-[active=true]:border-signal-gold data-[active=true]:bg-[oklch(from_var(--color-signal-gold)_l_c_h_/_0.06)]"
+        className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-border bg-card px-6 py-10 text-center transition-colors data-[active=true]:border-brand data-[active=true]:bg-[color-mix(in_oklch,var(--brand)_6%,transparent)]"
       >
         <UploadCloudIcon className="size-6 text-muted-foreground" />
         <div>

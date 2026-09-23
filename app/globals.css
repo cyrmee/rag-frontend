@@ -9,55 +9,86 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  /* Fayda-derived palette */
-  --color-vault-teal: #002532;
-  --color-tertiary: #002621;
-  --color-signal-gold: #f59e0b;
-  --color-signal-gold-hover: #d98609;
-  --color-signal-gold-fg: #92400e;
-  --color-grounded-bg: #e8f4f2;
-  --color-grounded-border: #b0d9d2;
-  --color-grounded-fg: #0f524d;
-  --color-pending-bg: #fdf1e6;
-  --color-pending-border: #e6b183;
-  --color-pending-fg: #7a3d12;
+  /* Fayda design system (design.fayda.et/design-system) — values copied
+     verbatim from the design system's own compiled CSS, not re-derived. */
+  --fayda-blue: #02324b;
+  --fayda-gold: #fbba36;
+  --fayda-emerald: #0fd5a1;
+  --fayda-red: #dc2626;
+  --fayda-sky: #4095bf;
 
-  --background: #f7f9fb;
-  --foreground: #1a2330;
-  --card: #ffffff;
-  --card-foreground: #1a2330;
-  --popover: #ffffff;
-  --popover-foreground: #1a2330;
-  --primary: var(--color-vault-teal);
-  --primary-foreground: #ffffff;
-  --secondary: oklch(0.96 0 0);
-  --secondary-foreground: #1a2330;
-  --muted: oklch(0.96 0 0);
-  --muted-foreground: oklch(0.48 0 0);
-  --accent: oklch(0.96 0 0);
-  --accent-foreground: #1a2330;
-  --destructive: #842323;
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: #4d6773;
-  --chart-1: var(--color-vault-teal);
-  --chart-2: var(--color-signal-gold);
-  --chart-3: oklch(0.556 0 0);
-  --chart-4: oklch(0.439 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --background: #fff;
+  --foreground: #0c0a09;
+  --card: #fff;
+  --card-foreground: #0c0a09;
+  --popover: #fff;
+  --popover-foreground: #0c0a09;
+  --primary: var(--fayda-blue);
+  --primary-foreground: #fbfaf9;
+  --secondary: var(--fayda-sky);
+  --secondary-foreground: #fbfaf9;
+  --brand: var(--fayda-gold);
+  --brand-foreground: #001421;
+  --brand-interactive: #e7a200;
+  --success: var(--fayda-emerald);
+  --success-foreground: #001421;
+  --muted: #f3f1f1;
+  --muted-foreground: #7c6d67;
+  --accent: color-mix(in oklch, var(--fayda-sky) 10%, transparent);
+  --accent-foreground: var(--foreground);
+  --destructive: var(--fayda-red);
+  --destructive-foreground: #fbfaf9;
+  --border: #e8e4e3;
+  --input: #e8e4e3;
+  --ring: var(--fayda-sky);
+  --chart-1: var(--fayda-blue);
+  --chart-2: var(--fayda-sky);
+  --chart-3: var(--fayda-gold);
+  --chart-4: var(--fayda-emerald);
+  --chart-5: var(--fayda-red);
   --radius: 0.45rem;
-  --sidebar: var(--color-vault-teal);
-  --sidebar-foreground: #dce4e7;
-  --sidebar-primary: var(--color-signal-gold);
-  --sidebar-primary-foreground: var(--color-vault-teal);
-  --sidebar-accent: rgba(255, 255, 255, 0.08);
-  --sidebar-accent-foreground: #ffffff;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: var(--color-signal-gold);
+  /* The design system's flat sidebar variant pairs #fbfaf9/#0c0a09; this app
+     always renders the branded gradient variant (bg-sidebar-gradient) below,
+     which needs the light-on-dark foreground pairing instead. */
+  --sidebar: #fbfaf9;
+  --sidebar-foreground: #fbfaf9;
+  --sidebar-primary: var(--fayda-blue);
+  --sidebar-primary-foreground: #fbfaf9;
+  --sidebar-accent: color-mix(in oklch, var(--fayda-sky) 10%, transparent);
+  --sidebar-accent-foreground: #fbfaf9;
+  --sidebar-border: #e8e4e3;
+  --sidebar-ring: var(--fayda-sky);
+
+  /* Full-page background gradient, per the design system's spec */
+  --page-bg-stop-0: #faf5ec;
+  --page-bg-stop-30: #e9f2ed;
+  --page-bg-stop-70: #e9f2ed;
+  --page-bg-stop-100: #f0f9f5;
+  --page-background: linear-gradient(
+    180deg,
+    var(--page-bg-stop-0) 0%,
+    var(--page-bg-stop-30) 30%,
+    var(--page-bg-stop-70) 70%,
+    var(--page-bg-stop-100) 100%
+  );
+
+  /* Sidebar gradient */
+  --sidebar-bg-stop-0: var(--fayda-blue);
+  --sidebar-bg-stop-100: var(--fayda-sky);
+  --sidebar-gradient: linear-gradient(135deg, var(--sidebar-bg-stop-0) 0%, var(--sidebar-bg-stop-100) 100%);
+
+  /* App-specific citation states (not part of the design system itself),
+     built from the exact brand tokens above. */
+  --color-grounded-bg: color-mix(in oklch, var(--fayda-emerald) 12%, white);
+  --color-grounded-border: color-mix(in oklch, var(--fayda-emerald) 40%, white);
+  --color-grounded-fg: color-mix(in oklch, var(--fayda-emerald) 65%, black);
+  --color-pending-bg: color-mix(in oklch, var(--fayda-gold) 12%, white);
+  --color-pending-border: color-mix(in oklch, var(--fayda-gold) 45%, white);
+  --color-pending-fg: color-mix(in oklch, var(--fayda-gold) 55%, black);
 }
 
 ::selection {
-  background: oklch(from var(--color-vault-teal) l c h / 0.2);
+  background: color-mix(in oklch, var(--fayda-blue) 20%, transparent);
 }
 
 * {
@@ -120,10 +151,19 @@ body {
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
-  --color-signal-gold: var(--color-signal-gold);
-  --color-signal-gold-fg: var(--color-signal-gold-fg);
-  --color-vault-teal: var(--color-vault-teal);
-  --color-tertiary: var(--color-tertiary);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-interactive: var(--brand-interactive);
+  --color-fayda-blue: var(--fayda-blue);
+  --color-fayda-gold: var(--fayda-gold);
+  --color-fayda-emerald: var(--fayda-emerald);
+  --color-fayda-red: var(--fayda-red);
+  --color-fayda-sky: var(--fayda-sky);
+  --font-heading: var(--font-heading);
+  --font-heading-ethiopic: var(--font-heading-ethiopic);
+  --font-ethiopic: var(--font-ethiopic);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -134,37 +174,46 @@ body {
 }
 
 .dark {
-  --background: oklch(0.16 0.01 220);
-  --foreground: oklch(0.94 0 0);
-  --card: oklch(0.2 0.012 220);
-  --card-foreground: oklch(0.94 0 0);
-  --popover: oklch(0.2 0.012 220);
-  --popover-foreground: oklch(0.94 0 0);
-  --primary: #7fa3b0;
-  --primary-foreground: #06131a;
-  --secondary: oklch(0.27 0.01 220);
-  --secondary-foreground: oklch(0.94 0 0);
-  --muted: oklch(0.27 0.01 220);
-  --muted-foreground: oklch(0.68 0 0);
-  --accent: oklch(0.27 0.01 220);
-  --accent-foreground: oklch(0.94 0 0);
-  --destructive: #d16969;
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: #7fa3b0;
-  --chart-1: #7fa3b0;
-  --chart-2: var(--color-signal-gold);
-  --chart-3: oklch(0.556 0 0);
-  --chart-4: oklch(0.439 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.2 0.012 220);
-  --sidebar-foreground: oklch(0.94 0 0);
-  --sidebar-primary: #7fa3b0;
-  --sidebar-primary-foreground: #06131a;
-  --sidebar-accent: oklch(0.27 0.01 220);
-  --sidebar-accent-foreground: oklch(0.94 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: #7fa3b0;
+  --background: #040c12;
+  --foreground: #fbfaf9;
+  --card: #091821;
+  --card-foreground: #fbfaf9;
+  --popover: #091821;
+  --popover-foreground: #fbfaf9;
+  --primary: #2d8ab8;
+  --primary-foreground: #040c12;
+  --secondary: var(--fayda-sky);
+  --secondary-foreground: #040c12;
+  --muted: #162128;
+  --muted-foreground: #97a7b3;
+  --accent: color-mix(in oklch, var(--fayda-sky) 10%, transparent);
+  --accent-foreground: var(--foreground);
+  --destructive: #f9423c;
+  --destructive-foreground: #fbfaf9;
+  --border: #ffffff1a;
+  --input: #ffffff26;
+  --ring: var(--fayda-sky);
+  --chart-1: #2d8ab8;
+  --chart-2: var(--fayda-sky);
+  --chart-3: var(--fayda-gold);
+  --chart-4: var(--fayda-emerald);
+  --chart-5: #f9423c;
+  --sidebar: #08141d;
+  --sidebar-foreground: #fbfaf9;
+  --sidebar-primary: #2d8ab8;
+  --sidebar-primary-foreground: #040c12;
+  --sidebar-accent: color-mix(in oklch, var(--fayda-sky) 10%, transparent);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: #ffffff1a;
+  --sidebar-ring: var(--fayda-sky);
+
+  --page-bg-stop-0: #031019;
+  --page-bg-stop-30: #020910;
+  --page-bg-stop-70: #020910;
+  --page-bg-stop-100: #031019;
+
+  --sidebar-bg-stop-0: #031019;
+  --sidebar-bg-stop-100: #003f5f;
 }
 
 @layer base {
@@ -172,15 +221,110 @@ body {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    background: var(--page-background);
+    background-attachment: fixed;
   }
   html {
     @apply font-sans;
   }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-heading), var(--font-sans);
+  }
+  :lang(am) {
+    font-family: var(--font-ethiopic), var(--font-sans);
+  }
+  :lang(am) h1,
+  :lang(am) h2,
+  :lang(am) h3,
+  :lang(am) h4,
+  :lang(am) h5,
+  :lang(am) h6 {
+    font-family: var(--font-heading-ethiopic), var(--font-heading), var(--font-sans);
+  }
+}
+
+/* Fayda "acrylic glass & specular borders" — exact rules copied from
+   design.fayda.et/design-system's own compiled CSS (three variants: a
+   floating panel with ambient shadow, a plain surface with no outer
+   shadow for modals, and a softer-shadow variant for tooltips). Pair
+   with Tailwind's `backdrop-blur-xl` utility, as the source markup does. */
+.acrylic-floating {
+  background-color: #fffc;
+  background-image: none;
+  border: 1px solid #ffffffd9;
+  box-shadow:
+    inset 0 1px 1px #fffffff2,
+    inset 0 -1px 1px #ffffff40,
+    0 0 0 1px #02324b0a,
+    0 0 20px #02324b1a,
+    0 8px 28px -2px #02324b14;
+}
+
+.acrylic-surface {
+  background-color: #fffc;
+  background-image: none;
+  border: 1px solid #ffffffd9;
+  box-shadow:
+    inset 0 1px 1px #fffffff2,
+    inset 0 -1px 1px #ffffff40;
+}
+
+.acrylic-tooltip {
+  background-color: #fffc;
+  background-image: none;
+  border: 1px solid #ffffffd9;
+  box-shadow:
+    inset 0 1px 1px #fffffff2,
+    inset 0 -1px 1px #ffffff40,
+    0 0 0 1px #02324b0a,
+    0 0 14px #02324b1f,
+    0 4px 14px -1px #02324b0f;
+}
+
+.dark .acrylic-floating,
+.dark .acrylic-surface,
+.dark .acrylic-tooltip {
+  background-color: #091821b3;
+  background-image: linear-gradient(#ffffff06 0%, #fff0 100%);
+  border: 1px solid #ffffff1a;
+}
+
+.dark .acrylic-floating {
+  box-shadow:
+    inset 0 1px 1px #ffffff24,
+    inset 0 -1px 1px #ffffff05,
+    0 0 0 1px #00000080,
+    0 0 28px #000000a6,
+    0 10px 32px -4px #0000008c;
+}
+
+.dark .acrylic-surface {
+  box-shadow:
+    inset 0 1px 1px #ffffff24,
+    inset 0 -1px 1px #ffffff05;
+}
+
+.dark .acrylic-tooltip {
+  box-shadow:
+    inset 0 1px 1px #ffffff24,
+    inset 0 -1px 1px #ffffff05,
+    0 0 0 1px #00000073,
+    0 0 18px #0009,
+    0 4px 16px -2px #00000073;
 }
 
 .bg-sidebar-gradient {
-  background: linear-gradient(165deg, var(--color-vault-teal) 0%, var(--color-tertiary) 100%);
+  background: var(--sidebar-gradient);
+}
+
+.bg-page-gradient {
+  background: var(--page-background);
 }
 
 .sidebar-scroll {

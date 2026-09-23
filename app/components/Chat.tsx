@@ -725,8 +725,8 @@ export default function Chat() {
         </div>
       )}
       <InputGroup
-        className="rounded-3xl border border-border bg-card p-1 shadow-sm transition-colors focus-within:border-signal-gold/60 hover:border-foreground/20"
-        style={{ "--ring": "var(--color-signal-gold)" } as React.CSSProperties}
+        className="rounded-3xl border border-border bg-card p-1 shadow-sm transition-colors focus-within:border-brand/60 hover:border-foreground/20"
+        style={{ "--ring": "var(--brand)" } as React.CSSProperties}
       >
         <InputGroupTextarea
           ref={textareaRef}
@@ -837,7 +837,7 @@ export default function Chat() {
   );
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background">
+    <div className="bg-page-gradient flex h-screen w-full overflow-hidden">
       {selectionMenu && (
         <div
           className="fixed z-50 -translate-x-1/2 -translate-y-full animate-in fade-in zoom-in-95 pb-2 duration-100"
@@ -1032,7 +1032,7 @@ function SidebarContent({
           Fayda አንባቢ
           <span
             aria-hidden="true"
-            className="size-1.5 rounded-full bg-signal-gold"
+            className="size-1.5 rounded-full bg-brand"
           />
         </span>
       </div>
@@ -1071,7 +1071,7 @@ function SidebarContent({
                       onSelectConversation(conv.id);
                     }
                   }}
-                  className="group/history-row flex cursor-pointer items-center justify-between gap-2 rounded-full px-3 py-2 text-left text-sm transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[oklch(from_var(--color-signal-gold)_l_c_h_/_0.2)]"
+                  className="group/history-row flex cursor-pointer items-center justify-between gap-2 rounded-full px-3 py-2 text-left text-sm transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[color-mix(in_oklch,var(--brand)_20%,transparent)]"
                   data-active={conv.id === activeConversationId}
                 >
                   <span className="min-w-0 flex-1 truncate text-white">
@@ -1112,7 +1112,7 @@ function SidebarItem({
       type="button"
       onClick={onClick}
       data-active={active}
-      className="flex items-center gap-2.5 rounded-full px-3 py-2 text-left text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[oklch(from_var(--color-signal-gold)_l_c_h_/_0.2)]"
+      className="flex items-center gap-2.5 rounded-full px-3 py-2 text-left text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[color-mix(in_oklch,var(--brand)_20%,transparent)]"
     >
       <Icon className="size-4 shrink-0 text-sidebar-foreground/70" />
       {label}
@@ -1284,7 +1284,7 @@ function ChatMessageRow({
                   }
                 }}
                 className="min-h-16 resize-none rounded-2xl text-sm shadow-none focus-visible:ring-0"
-                style={{ "--ring": "var(--color-signal-gold)" } as React.CSSProperties}
+                style={{ "--ring": "var(--brand)" } as React.CSSProperties}
               />
               <div className="mt-1.5 flex justify-end gap-1.5">
                 <Button variant="ghost" size="xs" onClick={onCancelEdit}>
