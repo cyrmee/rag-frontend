@@ -287,7 +287,7 @@ export default function DocumentPanel() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter sources…"
             aria-label="Filter sources"
-            className="h-9 rounded-full pl-8"
+            className="h-9 pl-8"
           />
         </div>
       )}

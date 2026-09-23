@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Figtree } from "next/font/google";
 import localFont from "next/font/local";
+import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/toast";
 import "./globals.css";
@@ -51,12 +52,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${figtree.variable} ${nokiaPureHeadline.variable} ${nokiaPureHeadlineEthiopic.variable} ${shiromedaSerif.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <Toaster>
-          <TooltipProvider>{children}</TooltipProvider>
-        </Toaster>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <Toaster>
+            <TooltipProvider>{children}</TooltipProvider>
+          </Toaster>
+        </ThemeProvider>
       </body>
     </html>
   );

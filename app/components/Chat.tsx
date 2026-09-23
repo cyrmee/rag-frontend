@@ -62,6 +62,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { toast } from "@/components/ui/toast";
 import {
   ArrowLeftIcon,
@@ -725,7 +726,7 @@ export default function Chat() {
         </div>
       )}
       <InputGroup
-        className="rounded-3xl border border-border bg-card p-1 shadow-sm transition-colors focus-within:border-brand/60 hover:border-foreground/20"
+        className="rounded-2xl border border-border bg-card p-1 shadow-xs transition-colors focus-within:border-brand/60 hover:border-foreground/20"
         style={{ "--ring": "var(--brand)" } as React.CSSProperties}
       >
         <InputGroupTextarea
@@ -771,7 +772,7 @@ export default function Chat() {
               size="sm"
               onClick={() => setWebSearchEnabled((v) => !v)}
               aria-pressed={webSearchEnabled}
-              className="gap-1.5 rounded-full"
+              className="gap-1.5"
             >
               <GlobeIcon data-icon="inline-start" />
               <span className="hidden sm:inline">Search the web</span>
@@ -846,7 +847,7 @@ export default function Chat() {
           <Button
             variant="default"
             size="sm"
-            className="rounded-full shadow-md"
+            className="shadow-md"
             onClick={handleReplyToSelection}
           >
             <ReplyIcon data-icon="inline-start" />
@@ -1071,7 +1072,7 @@ function SidebarContent({
                       onSelectConversation(conv.id);
                     }
                   }}
-                  className="group/history-row flex cursor-pointer items-center justify-between gap-2 rounded-full px-3 py-2 text-left text-sm transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[color-mix(in_oklch,var(--brand)_20%,transparent)]"
+                  className="group/history-row flex cursor-pointer items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[color-mix(in_oklch,var(--brand)_20%,transparent)]"
                   data-active={conv.id === activeConversationId}
                 >
                   <span className="min-w-0 flex-1 truncate text-white">
@@ -1091,6 +1092,10 @@ function SidebarContent({
             })}
           </div>
         )}
+      </div>
+
+      <div className="mt-2 border-t border-white/10 pt-2">
+        <ThemeToggle />
       </div>
     </div>
   );
@@ -1112,7 +1117,7 @@ function SidebarItem({
       type="button"
       onClick={onClick}
       data-active={active}
-      className="flex items-center gap-2.5 rounded-full px-3 py-2 text-left text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[color-mix(in_oklch,var(--brand)_20%,transparent)]"
+      className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm font-medium text-white transition-[background-color,transform] duration-150 hover:bg-sidebar-accent active:scale-[0.98] data-[active=true]:bg-[color-mix(in_oklch,var(--brand)_20%,transparent)]"
     >
       <Icon className="size-4 shrink-0 text-sidebar-foreground/70" />
       {label}
@@ -1283,7 +1288,7 @@ function ChatMessageRow({
                     onCancelEdit();
                   }
                 }}
-                className="min-h-16 resize-none rounded-2xl text-sm shadow-none focus-visible:ring-0"
+                className="min-h-16 resize-none text-sm shadow-none focus-visible:ring-0"
                 style={{ "--ring": "var(--brand)" } as React.CSSProperties}
               />
               <div className="mt-1.5 flex justify-end gap-1.5">
@@ -1315,7 +1320,7 @@ function ChatMessageRow({
               ))}
             </div>
           )}
-          <Bubble align="end" variant="secondary">
+          <Bubble align="end" variant="muted">
             <BubbleContent className="whitespace-pre-wrap">
               {message.content}
             </BubbleContent>
