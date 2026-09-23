@@ -26,6 +26,11 @@ export type ChatMessage = {
   sources?: AskSource[];
   citations?: CitationSegment[];
   toolEvents?: ToolEvent[];
+  // Files attached when this (user) message was sent - display only, like
+  // sources/citations below: the backend doesn't persist attachment text
+  // or metadata with the turn, so this won't come back if the conversation
+  // is reopened later, only for the turn just sent in this session.
+  attachments?: { filename: string; charCount: number }[];
   createdAt: number;
 };
 

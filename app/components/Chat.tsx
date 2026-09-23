@@ -9,8 +9,10 @@ import {
   getConversation,
   listConversations,
   streamAsk,
+  uploadAttachment,
   uploadDocumentWithProgress,
   type AskSource,
+  type AttachmentInfo,
   type CitationSegment,
   type ConversationSummary,
 } from "@/lib/api";
@@ -69,8 +71,10 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  FileTextIcon,
   FolderOpenIcon,
   GlobeIcon,
+  Loader2Icon,
   MenuIcon,
   MicIcon,
   PaperclipIcon,
@@ -80,6 +84,7 @@ import {
   RotateCcwIcon,
   SquareIcon,
   SquarePenIcon,
+  XIcon,
   Trash2Icon,
 } from "lucide-react";
 
@@ -210,10 +215,16 @@ export default function Chat() {
   );
   const [listening, setListening] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  // Files attached for the *next* message only - cleared once that
+  // message is sent. Distinct from "Add files" (attachInputRef below),
+  // which ingests into the searchable Sources corpus permanently.
+  const [pendingAttachments, setPendingAttachments] = useState<AttachmentInfo[]>([]);
+  const [attachingToMessage, setAttachingToMessage] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
+  const attachToMessageInputRef = useRef<HTMLInputElement>(null);
   // Web Speech API has no official TS lib typing; SpeechRecognition here is
   // whatever constructor the browser exposes (vendor-prefixed on Chromium).
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -298,8 +309,10 @@ export default function Chat() {
   // to branch from there. A normal send passes the current activeLeafId
   // (or null for a brand-new conversation); editing/regenerating passes
   // the edited/regenerated message's own parentId, so the new turn becomes
-  // a sibling of what's already there instead of replacing it.
-  async function runAsk(question: string, parentId: string | null) {
+  // a sibling of what's already there instead of replacing it. `attachments`
+  // is only meaningful for a normal send - editing/regenerating re-asks
+  // without re-attaching whatever was attached the first time.
+  async function runAsk(question: string, parentId: string | null, attachments: AttachmentInfo[] = []) {
     if (!question || pending) return;
 
     const tempUserId = makeId();
@@ -307,7 +320,16 @@ export default function Chat() {
     const now = Date.now();
     setNodes((prev) => ({
       ...prev,
-      [tempUserId]: { id: tempUserId, parentId, role: "user", content: question, createdAt: now },
+      [tempUserId]: {
+        id: tempUserId,
+        parentId,
+        role: "user",
+        content: question,
+        createdAt: now,
+        attachments: attachments.length
+          ? attachments.map((a) => ({ filename: a.filename, charCount: a.char_count }))
+          : undefined,
+      },
       [tempAssistantId]: {
         id: tempAssistantId,
         parentId: tempUserId,
@@ -334,7 +356,12 @@ export default function Chat() {
     try {
       await streamAsk(
         question,
-        { conversationId, parentMessageId: parentId ?? "", webSearch: webSearchEnabled },
+        {
+          conversationId,
+          parentMessageId: parentId ?? "",
+          webSearch: webSearchEnabled,
+          attachmentIds: attachments.map((a) => a.id),
+        },
         {
           onThinking: (token) => {
             updateAssistant((m) => ({
@@ -419,7 +446,9 @@ export default function Chat() {
     const question = input.trim();
     if (!question || pending) return;
     setInput("");
-    await runAsk(question, activeLeafId);
+    const attachments = pendingAttachments;
+    setPendingAttachments([]);
+    await runAsk(question, activeLeafId, attachments);
   }
 
   function handleStop() {
@@ -646,8 +675,55 @@ export default function Chat() {
     }
   }
 
+  // Unlike handleAttachFiles above (which ingests into the permanent,
+  // searchable Sources corpus), this attaches a file to the *next*
+  // message only - its text rides along with that one question and the
+  // backend discards it afterward. Sequential (not parallel) so a slow
+  // upload doesn't race the pendingAttachments state update below.
+  async function handleAttachToMessage(files: FileList) {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    setAttachingToMessage(true);
+    let firstError: string | null = null;
+    for (const file of list) {
+      try {
+        const info = await uploadAttachment(file);
+        setPendingAttachments((prev) => [...prev, info]);
+      } catch (err) {
+        firstError ??= err instanceof Error ? err.message : "Attaching failed.";
+      }
+    }
+    setAttachingToMessage(false);
+    if (attachToMessageInputRef.current) attachToMessageInputRef.current.value = "";
+    if (firstError) {
+      toast.add({ title: "Couldn't attach file", description: firstError, type: "error" });
+    }
+  }
+
+  function handleRemovePendingAttachment(id: string) {
+    setPendingAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
   const composer = (
     <form onSubmit={handleSubmit} className="w-full">
+      {(pendingAttachments.length > 0 || attachingToMessage) && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {pendingAttachments.map((a) => (
+            <AttachmentChip
+              key={a.id}
+              filename={a.filename}
+              charCount={a.char_count}
+              onRemove={() => handleRemovePendingAttachment(a.id)}
+            />
+          ))}
+          {attachingToMessage && (
+            <span className="flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground">
+              <Loader2Icon className="size-3.5 animate-spin" />
+              Attaching…
+            </span>
+          )}
+        </div>
+      )}
       <InputGroup
         className="rounded-3xl border border-border bg-card p-1 shadow-sm transition-colors focus-within:border-signal-gold/60 hover:border-foreground/20"
         style={{ "--ring": "var(--color-signal-gold)" } as React.CSSProperties}
@@ -678,9 +754,13 @@ export default function Chat() {
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start">
                 <DropdownMenuGroup>
-                  <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
+                  <DropdownMenuItem onClick={() => attachToMessageInputRef.current?.click()}>
                     <PaperclipIcon data-icon="inline-start" />
-                    Add files
+                    Attach to this message
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
+                    <FolderOpenIcon data-icon="inline-start" />
+                    Add to Sources
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               </DropdownMenuContent>
@@ -705,6 +785,16 @@ export default function Chat() {
             hidden
             onChange={(e) => {
               if (e.target.files) handleAttachFiles(e.target.files);
+            }}
+          />
+          <input
+            ref={attachToMessageInputRef}
+            type="file"
+            accept={ACCEPTED_TYPES}
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) handleAttachToMessage(e.target.files);
             }}
           />
 
@@ -734,7 +824,7 @@ export default function Chat() {
                 type="submit"
                 variant="default"
                 size="icon-sm"
-                disabled={!input.trim()}
+                disabled={!input.trim() || attachingToMessage}
                 aria-label="Send"
               >
                 <ArrowUpIcon className="animate-in zoom-in-50 duration-150" />
@@ -1062,6 +1152,40 @@ function CopyButton({
   );
 }
 
+function AttachmentChip({
+  filename,
+  charCount,
+  onRemove,
+}: {
+  filename: string;
+  charCount: number;
+  onRemove?: () => void;
+}) {
+  return (
+    <span className="flex max-w-56 items-center gap-1.5 rounded-full border border-border bg-muted/50 py-1 pr-1 pl-2.5 text-xs">
+      <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate" title={filename}>
+        {filename}
+      </span>
+      <span className="shrink-0 text-muted-foreground">
+        {charCount >= 1000 ? `${Math.round(charCount / 1000)}k` : charCount} chars
+      </span>
+      {onRemove && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="size-4 shrink-0"
+          onClick={onRemove}
+          aria-label={`Remove ${filename}`}
+        >
+          <XIcon className="size-3" />
+        </Button>
+      )}
+    </span>
+  );
+}
+
 // "‹ 2/3 ›" control for cycling between alternate versions of a question
 // (an edit, or the question a regenerated answer re-asked) at the same
 // branch point. Hidden entirely when there's nothing to switch between.
@@ -1184,6 +1308,13 @@ function ChatMessageRow({
     return (
       <Message align="end">
         <MessageContent>
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="mb-1 flex flex-wrap justify-end gap-1.5">
+              {message.attachments.map((a, i) => (
+                <AttachmentChip key={i} filename={a.filename} charCount={a.charCount} />
+              ))}
+            </div>
+          )}
           <Bubble align="end" variant="secondary">
             <BubbleContent className="whitespace-pre-wrap">
               {message.content}

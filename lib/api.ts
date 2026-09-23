@@ -15,6 +15,16 @@ export type DeleteResponse = {
   chunks_deleted: number;
 };
 
+// From POST /attachments - a file attached to one chat message, not the
+// searchable document corpus (see UploadResponse/DocumentEntry for that).
+// `char_count` is what the backend's combined-attachments budget for one
+// message is measured against - not file count.
+export type AttachmentInfo = {
+  id: string;
+  filename: string;
+  char_count: number;
+};
+
 export type ConversationSummary = {
   id: string;
   title: string | null;
@@ -40,10 +50,22 @@ export type ConversationDetail = {
   messages: ConversationMessageNode[];
 };
 
+// FastAPI's standard error shape is {"detail": "..."} - unwrap that so an
+// error bubble shows the actual message instead of raw JSON.
+function errorMessageFrom(body: string, status: number): string {
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed?.detail === "string") return parsed.detail;
+  } catch {
+    // not JSON, fall through to the raw body
+  }
+  return body || `Request failed with status ${status}`;
+}
+
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(body || `Request failed with status ${res.status}`);
+    throw new Error(errorMessageFrom(body, res.status));
   }
   return res.json() as Promise<T>;
 }
@@ -159,10 +181,14 @@ export async function streamAsk(
     // it), or an earlier message's id to branch from anywhere else - see
     // AskRequest.parent_message_id on the backend.
     parentMessageId?: string;
-    // `webSearch` isn't live on the backend yet - included here so the
-    // frontend already sends it once /ask supports it; harmless (ignored)
-    // until then.
+    // Exposes the web_search tool to the model for this turn only - off
+    // by default.
     webSearch?: boolean;
+    // Ids from prior uploadAttachment() calls - their extracted text is
+    // folded into this turn's question server-side, then discarded (not
+    // persisted with the turn). The backend rejects the request (413) if
+    // the combined attached content is over budget.
+    attachmentIds?: string[];
   },
   handlers: AskStreamHandlers,
   signal?: AbortSignal
@@ -183,13 +209,14 @@ export async function streamAsk(
       conversation_id: options.conversationId,
       parent_message_id: options.parentMessageId,
       ...(options.webSearch ? { web_search: true } : {}),
+      ...(options.attachmentIds?.length ? { attachment_ids: options.attachmentIds } : {}),
     }),
     signal,
   });
 
   if (!res.ok || !res.body) {
     const body = await res.text().catch(() => "");
-    throw new Error(body || `Request failed with status ${res.status}`);
+    throw new Error(errorMessageFrom(body, res.status));
   }
 
   for await (const { event, data } of readSSE(res.body)) {
@@ -291,6 +318,19 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
     body: formData,
   });
   return handleResponse<UploadResponse>(res);
+}
+
+// Attaches a file to one chat message rather than the searchable document
+// corpus - see AttachmentInfo. The backend extracts and holds its text;
+// this just returns the id/char_count so it can be shown and referenced.
+export async function uploadAttachment(file: File): Promise<AttachmentInfo> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(new URL("/attachments", API_BASE), {
+    method: "POST",
+    body: formData,
+  });
+  return handleResponse<AttachmentInfo>(res);
 }
 
 // Uses XHR instead of fetch so we can report upload-body progress; once the
