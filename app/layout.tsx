@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Figtree } from "next/font/google";
 import localFont from "next/font/local";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthProvider } from "@/lib/auth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/toast";
 import "./globals.css";
@@ -58,7 +59,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="flex min-h-full flex-col">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <Toaster>
-            <TooltipProvider>{children}</TooltipProvider>
+            <TooltipProvider>
+              <AuthProvider>{children}</AuthProvider>
+            </TooltipProvider>
           </Toaster>
         </ThemeProvider>
       </body>

@@ -1,4 +1,17 @@
+import { getAccessToken, signInAgain } from "@/lib/auth";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+// Every backend route except /health needs the signed-in user's access
+// token. A 401 means Keycloak's session is gone or the token was
+// rejected - send the user back through the login page.
+async function apiFetch(input: URL, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${await getAccessToken()}`);
+  const res = await fetch(input, { ...init, headers });
+  if (res.status === 401) signInAgain();
+  return res;
+}
 
 export type DocumentEntry = {
   filename: string;
@@ -201,7 +214,7 @@ export async function streamAsk(
     url.searchParams.set("max_iterations", String(options.maxIterations));
   }
 
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -285,22 +298,22 @@ export async function streamAsk(
 }
 
 export async function listDocuments(): Promise<DocumentEntry[]> {
-  const res = await fetch(new URL("/documents", API_BASE));
+  const res = await apiFetch(new URL("/documents", API_BASE));
   return handleResponse<DocumentEntry[]>(res);
 }
 
 export async function listConversations(): Promise<ConversationSummary[]> {
-  const res = await fetch(new URL("/conversations", API_BASE));
+  const res = await apiFetch(new URL("/conversations", API_BASE));
   return handleResponse<ConversationSummary[]>(res);
 }
 
 export async function getConversation(id: string): Promise<ConversationDetail> {
-  const res = await fetch(new URL(`/conversations/${encodeURIComponent(id)}`, API_BASE));
+  const res = await apiFetch(new URL(`/conversations/${encodeURIComponent(id)}`, API_BASE));
   return handleResponse<ConversationDetail>(res);
 }
 
 export async function deleteConversationApi(id: string): Promise<void> {
-  const res = await fetch(
+  const res = await apiFetch(
     new URL(`/conversations/${encodeURIComponent(id)}`, API_BASE),
     { method: "DELETE" }
   );
@@ -313,7 +326,7 @@ export async function deleteConversationApi(id: string): Promise<void> {
 export async function uploadDocument(file: File): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  const res = await fetch(new URL("/upload", API_BASE), {
+  const res = await apiFetch(new URL("/upload", API_BASE), {
     method: "POST",
     body: formData,
   });
@@ -326,7 +339,7 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
 export async function uploadAttachment(file: File): Promise<AttachmentInfo> {
   const formData = new FormData();
   formData.append("file", file);
-  const res = await fetch(new URL("/attachments", API_BASE), {
+  const res = await apiFetch(new URL("/attachments", API_BASE), {
     method: "POST",
     body: formData,
   });
@@ -336,16 +349,18 @@ export async function uploadAttachment(file: File): Promise<AttachmentInfo> {
 // Uses XHR instead of fetch so we can report upload-body progress; once the
 // body finishes sending, `onProgress` stops firing while the server chunks
 // and embeds the file — callers should treat "stuck at 100%" as processing.
-export function uploadDocumentWithProgress(
+export async function uploadDocumentWithProgress(
   file: File,
   onProgress?: (percent: number) => void
 ): Promise<UploadResponse> {
+  const token = await getAccessToken();
   return new Promise((resolve, reject) => {
     const formData = new FormData();
     formData.append("file", file);
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", new URL("/upload", API_BASE).toString());
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
@@ -361,6 +376,7 @@ export function uploadDocumentWithProgress(
           reject(new Error("The server returned an unreadable response."));
         }
       } else {
+        if (xhr.status === 401) signInAgain();
         reject(new Error(xhr.responseText || `Request failed with status ${xhr.status}`));
       }
     };
@@ -372,7 +388,7 @@ export function uploadDocumentWithProgress(
 }
 
 export async function deleteDocument(filename: string): Promise<DeleteResponse> {
-  const res = await fetch(
+  const res = await apiFetch(
     new URL(`/documents/${encodeURIComponent(filename)}`, API_BASE),
     { method: "DELETE" }
   );

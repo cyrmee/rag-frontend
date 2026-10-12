@@ -6,6 +6,7 @@ import type { ConversationSummary } from "@/lib/api";
 import { titleFromQuestion } from "@/lib/conversations";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { UserMenu } from "@/app/components/UserMenu";
 import { FolderOpenIcon, SquarePenIcon, Trash2Icon } from "lucide-react";
 
 // Shared between the chat page (/) and the Sources page (/sources) - each
@@ -89,7 +90,8 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="mt-2 border-t border-white/10 pt-2">
+      <div className="mt-2 flex flex-col gap-1.5 border-t border-white/10 pt-2">
+        <UserMenu />
         <ThemeToggle />
       </div>
     </div>
