@@ -285,18 +285,30 @@ export default function Chat() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Selecting text inside the transcript surfaces a floating "Reply" button
-  // near the selection, so quoting part of an earlier message into a
-  // follow-up doesn't require manually copying and retyping it.
+  // Selecting text in an answer surfaces a floating "Reply" button near
+  // the selection, so quoting part of an answer into a follow-up doesn't
+  // require manually copying and retyping it. Only answer text counts
+  // (the element marked data-answer-text in ChatMessageRow) - not
+  // questions, reasoning, lookups or source lists - and the selection must
+  // start and end in the same answer.
   useEffect(() => {
+    function answerTextOf(node: Node | null): Element | null {
+      const element = node instanceof Element ? node : (node?.parentElement ?? null);
+      return element?.closest("[data-answer-text]") ?? null;
+    }
+
     function handleSelectionChange() {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.toString().trim()) {
         setSelectionMenu(null);
         return;
       }
-      const anchorNode = sel.anchorNode;
-      if (!anchorNode || !transcriptRef.current?.contains(anchorNode)) {
+      const answer = answerTextOf(sel.anchorNode);
+      if (
+        !answer ||
+        answer !== answerTextOf(sel.focusNode) ||
+        !transcriptRef.current?.contains(answer)
+      ) {
         setSelectionMenu(null);
         return;
       }
@@ -1289,7 +1301,7 @@ function ChatMessageRow({
         ) : (
           <Bubble variant="ghost">
             <BubbleContent>
-              <div className="chat-markdown">
+              <div className="chat-markdown" data-answer-text>
                 {message.citations && message.citations.length > 0 ? (
                   // Answer is complete: render the clean, structured
                   // citation breakdown rather than the raw streamed text
