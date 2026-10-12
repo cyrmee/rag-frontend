@@ -1,6 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from "react";
+import {
+  isValidElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type AnchorHTMLAttributes,
+  type HTMLAttributes,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -22,6 +32,8 @@ import {
   type ChatMessage,
 } from "@/lib/conversations";
 import { ACCEPTED_TYPES } from "@/app/components/DocumentPanel";
+import { AnswerChart, ChartSourcesContext } from "@/components/answer-chart";
+import { parseChartSpec } from "@/lib/charts";
 import { Sidebar } from "@/app/components/Sidebar";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
@@ -88,12 +100,42 @@ import {
 
 // Citation links (and any other link the model's markdown happens to
 // produce) open in a new tab rather than navigating away from the chat.
+// A ```chart fenced block (the backend's validated chart spec - see
+// lib/charts.ts) renders as a chart instead of a code block: `code`
+// swaps the block for AnswerChart, and `pre` drops its own wrapper
+// around it so the figure isn't boxed as code. A block that doesn't
+// parse stays a plain code block.
+type CodeProps = HTMLAttributes<HTMLElement> & { className?: string; children?: ReactNode };
+
+function chartSpecOf(element: unknown) {
+  if (!isValidElement<CodeProps>(element)) return null;
+  const { className, children } = (element as ReactElement<CodeProps>).props;
+  if (typeof className !== "string" || !className.includes("language-chart")) return null;
+  return parseChartSpec(String(children ?? ""));
+}
+
 const markdownComponents = {
   a: ({ href, title, children }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={href} title={title} target="_blank" rel="noreferrer noopener" className="chat-citation-link">
       {children}
     </a>
   ),
+  pre: ({ children, ...props }: HTMLAttributes<HTMLPreElement>) => {
+    const only = Array.isArray(children) && children.length === 1 ? children[0] : children;
+    if (chartSpecOf(only)) return <>{children}</>;
+    return <pre {...props}>{children}</pre>;
+  },
+  code: ({ className, children, ...props }: CodeProps) => {
+    if (className?.includes("language-chart")) {
+      const spec = parseChartSpec(String(children ?? ""));
+      if (spec) return <AnswerChart spec={spec} />;
+    }
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  },
 };
 
 // Minimal shape of the Web Speech API's SpeechRecognition — not in TS's
@@ -1302,6 +1344,7 @@ function ChatMessageRow({
           <Bubble variant="ghost">
             <BubbleContent>
               <div className="chat-markdown" data-answer-text>
+                <ChartSourcesContext.Provider value={message.sources}>
                 {message.citations && message.citations.length > 0 ? (
                   // Answer is complete: render the clean, structured
                   // citation breakdown rather than the raw streamed text
@@ -1317,6 +1360,7 @@ function ChatMessageRow({
                     {message.content}
                   </ReactMarkdown>
                 )}
+                </ChartSourcesContext.Provider>
               </div>
             </BubbleContent>
           </Bubble>

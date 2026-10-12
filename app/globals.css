@@ -489,3 +489,167 @@ body {
 .chat-citation-link:hover {
   text-decoration: underline;
 }
+
+/* Charts in answers (components/answer-chart.tsx): a figure in the flow
+   of the answer, drawn in SVG with the re-stepped brand hues from
+   lib/charts.ts. Text wears the text tokens, never a series colour. */
+.answer-chart {
+  margin: 0.4em 0 0.9em;
+  padding: 0.75rem 0.75rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+
+.answer-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.answer-chart-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  letter-spacing: -0.01em;
+  min-width: 0;
+}
+
+.answer-chart-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.125rem;
+}
+
+.answer-chart-plot {
+  position: relative;
+}
+
+.answer-chart-tip {
+  position: absolute;
+  top: 8px;
+  z-index: 1;
+  pointer-events: none;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.08);
+  white-space: nowrap;
+}
+
+.answer-chart-tip-label {
+  color: var(--muted-foreground);
+  margin-bottom: 0.15rem;
+}
+
+.answer-chart-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.answer-chart-tip-row strong {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.answer-chart-tip-row span:last-child:not(.answer-chart-key) {
+  color: var(--muted-foreground);
+}
+
+.answer-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.answer-chart-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.answer-chart-key {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.answer-chart-key[data-shape="line"] {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.answer-chart-note {
+  margin: 0.5rem 0 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-pending-border);
+  border-radius: var(--radius-md);
+  background: var(--color-pending-bg);
+  color: var(--color-pending-fg);
+  font-size: 0.75rem;
+}
+
+.answer-chart-sources {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.answer-chart-sources .chat-citation-link {
+  margin-left: 0.15rem;
+}
+
+.answer-chart-table {
+  margin-top: 0.6rem;
+}
+
+.answer-chart-table td {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@media (max-width: 560px) {
+  .answer-chart {
+    padding: 0.5rem 0.5rem 0.4rem;
+  }
+}
+
+.answer-chart-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.answer-chart-center strong {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.answer-chart-plot .recharts-wrapper:focus-visible,
+.answer-chart-plot .recharts-surface:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
