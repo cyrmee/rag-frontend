@@ -8,6 +8,12 @@ export type ApiEndpoint = {
 
 export const apiEndpoints: ApiEndpoint[] = [
   {
+    method: "GET",
+    path: "/me",
+    summary: "The signed-in user the access token belongs to.",
+    response: "{ id: string, username: string, email: string | null, name: string | null }",
+  },
+  {
     method: "POST",
     path: "/upload",
     summary: "Upload a document (PDF, DOCX, PPTX, XLSX, TXT, MD) for chunking, embedding, and storage.",
@@ -16,12 +22,20 @@ export const apiEndpoints: ApiEndpoint[] = [
   },
   {
     method: "POST",
+    path: "/attachments",
+    summary: "Attach a file to one chat message. Its text rides along with that question only and is not added to Sources.",
+    request: "multipart/form-data — file",
+    response: "{ id: string, filename: string, char_count: number }",
+  },
+  {
+    method: "POST",
     path: "/ask",
     summary:
-      "Ask a question. Always agentic and always streamed as Server-Sent Events (no single-pass or non-streaming variant) — the model decides when/how many times to retrieve, and can call list_documents (corpus meta-questions) or describe_image (a deeper look at a figure). Pass a prior response's conversation_id to continue that conversation.",
-    request: "{ question: string, conversation_id?: string }  (query param: max_iterations? 1-10)",
+      "Ask a question, streamed as Server-Sent Events. `mode` picks how it is answered: agent (quick), council (parallel searches plus a citation check) or research (multi-round reading, minutes). Omitted, the backend routes between agent and council per question.",
+    request:
+      "{ question: string, conversation_id?: string, parent_message_id?: string, web_search?: boolean, attachment_ids?: string[], mode?: 'agent' | 'council' | 'research' }  (query param: max_iterations? 1-10)",
     response:
-      "SSE events: thinking/answer (tokens), tool_call/tool_result, then one done with { sources: SourceInfo[], conversation_id: string }",
+      "SSE events: thinking/answer (tokens), tool_call/tool_result, research_plan/research_progress (research mode), then one done with { sources, conversation_id, citations, charts, citation_warnings, mode, not_found, user_message_id, assistant_message_id, title }",
   },
   {
     method: "GET",
@@ -32,14 +46,22 @@ export const apiEndpoints: ApiEndpoint[] = [
   {
     method: "GET",
     path: "/conversations/{conversation_id}",
-    summary: "Full turn history for one conversation.",
-    response: "[{ role: 'user' | 'assistant', content: string }]",
+    summary: "Every message in every branch of one conversation.",
+    response: "{ id, title, active_message_id, messages: [{ id, parent_message_id, role, content, created_at }] }",
+  },
+  {
+    method: "DELETE",
+    path: "/conversations/{conversation_id}",
+    summary: "Delete one of the signed-in user's conversations.",
+    response: "{ id: string }",
   },
   {
     method: "GET",
     path: "/documents",
-    summary: "List all ingested documents with their chunk counts.",
-    response: "[{ filename: string, chunk_count: number }]",
+    summary:
+      "One page of the ingested documents in filename order, searchable by filename. `total` is the match count, for paging.",
+    request: "query params: q? (case-insensitive filename substring, up to 200 characters), limit? (1-500, default 50), offset? (default 0)",
+    response: "{ documents: [{ filename: string, chunk_count: number }], total: number, limit: number, offset: number }",
   },
   {
     method: "DELETE",

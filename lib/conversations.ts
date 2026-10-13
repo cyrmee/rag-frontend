@@ -1,4 +1,11 @@
-import type { AskSource, CitationSegment } from "@/lib/api";
+import type {
+  AnsweredMode,
+  AskSource,
+  CitationSegment,
+  CitationWarning,
+  ResearchPlan,
+  ResearchProgress,
+} from "@/lib/api";
 
 export type ToolEvent = {
   id: string;
@@ -31,6 +38,22 @@ export type ChatMessage = {
   // or metadata with the turn, so this won't come back if the conversation
   // is reopened later, only for the turn just sent in this session.
   attachments?: { filename: string; charCount: number }[];
+  // From the done event, for the turn just streamed: which mode answered,
+  // sentences the citation check flagged, and (research mode) the
+  // sub-questions the documents didn't answer.
+  mode?: AnsweredMode;
+  citationWarnings?: CitationWarning[];
+  notFound?: string[];
+  // Stopped with the stop button before it finished.
+  stopped?: boolean;
+  // Research mode while it runs: the plan, the latest stage, and when the
+  // turn started (for an elapsed-time readout - research takes minutes).
+  research?: {
+    plan?: ResearchPlan;
+    progress?: ResearchProgress;
+    startedAt: number;
+    finishedAt?: number;
+  };
   createdAt: number;
 };
 

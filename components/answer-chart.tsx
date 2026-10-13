@@ -20,12 +20,14 @@ import {
 import type { AskSource } from "@/lib/api";
 import { formatCompact, formatValue, seriesColor, type ChartSpec } from "@/lib/charts";
 import { Button } from "@/components/ui/button";
+import { focusSource, sourceHref } from "@/lib/source-focus";
 
-// The sources of the turn a chart belongs to, so its "[n]" chips can link
-// to the documents like the citations in the prose do. Provided by the
-// assistant message around its markdown; absent (a reopened conversation,
-// which has no per-turn sources) the chips are plain text.
-export const ChartSourcesContext = createContext<AskSource[] | undefined>(undefined);
+// The sources of the turn a chart belongs to, and that turn's message id,
+// so its "[n]" chips open the source in the list under the answer like
+// the citations in the prose do. Provided by the assistant message around
+// its markdown; absent (an answer saved without its sources) the chips
+// are plain text.
+export const ChartSourcesContext = createContext<{ sources?: AskSource[]; messageId?: string }>({});
 
 // Everything the SVG is drawn with comes from the app's theme tokens,
 // so a chart follows the interface in either theme. The PNG download
@@ -64,7 +66,7 @@ function resolvedSvgCopy(svg: SVGSVGElement): SVGSVGElement {
 
 export function AnswerChart({ spec }: { spec: ChartSpec }) {
   const ink = INK;
-  const sources = useContext(ChartSourcesContext);
+  const { sources, messageId } = useContext(ChartSourcesContext);
   const containerRef = useRef<HTMLDivElement>(null);
   const [showTable, setShowTable] = useState(false);
   const titleId = useId();
@@ -278,12 +280,14 @@ export function AnswerChart({ spec }: { spec: ChartSpec }) {
           {spec.sources.map((n) => {
             const source = sources?.[n - 1];
             const label = `[${n}]`;
-            return source?.document_url ? (
+            return source && messageId ? (
               <a
                 key={n}
-                href={source.document_url}
-                target="_blank"
-                rel="noreferrer noopener"
+                href={sourceHref(messageId, n)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  focusSource(messageId, n);
+                }}
                 title={source.filename}
                 className="chat-citation-link"
               >

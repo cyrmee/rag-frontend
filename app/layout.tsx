@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Figtree } from "next/font/google";
 import localFont from "next/font/local";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -47,6 +47,18 @@ export const metadata: Metadata = {
   title: "Fayda አንባቢ",
   description:
     "Fayda አንባቢ (Amharic: reader) — upload your documents, then ask questions answered from what you've uploaded.",
+};
+
+// viewport-fit=cover lets the layout reach under phone notches and home
+// indicators; the chat pads itself back in with env(safe-area-inset-*).
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#faf5ec" },
+    { media: "(prefers-color-scheme: dark)", color: "#031019" },
+  ],
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

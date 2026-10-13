@@ -52,6 +52,14 @@ export type ConversationMessageNode = {
   role: string;
   content: string;
   created_at: string;
+  // What an answer was built from, saved with it (the same values its
+  // /ask done event carried) - null for questions, and for answers saved
+  // before the backend began storing them.
+  mode?: AnsweredMode | null;
+  sources?: AskSource[] | null;
+  citations?: CitationSegment[] | null;
+  citation_warnings?: CitationWarning[] | null;
+  not_found?: string[] | null;
 };
 
 export type ConversationDetail = {
@@ -65,10 +73,18 @@ export type ConversationDetail = {
 
 // FastAPI's standard error shape is {"detail": "..."} - unwrap that so an
 // error bubble shows the actual message instead of raw JSON.
+// Some routes put an object in `detail` instead: /upload's 409 for a file
+// identical to one already uploaded is {message, existing_filename}, and
+// a validation failure (422) is a list of {msg}.
 function errorMessageFrom(body: string, status: number): string {
   try {
-    const parsed = JSON.parse(body);
-    if (typeof parsed?.detail === "string") return parsed.detail;
+    const detail = JSON.parse(body)?.detail;
+    if (typeof detail === "string") return detail;
+    if (typeof detail?.existing_filename === "string") {
+      return `This file is identical to “${detail.existing_filename}”, which is already in Sources.`;
+    }
+    if (typeof detail?.message === "string") return detail.message;
+    if (Array.isArray(detail) && typeof detail[0]?.msg === "string") return detail[0].msg;
   } catch {
     // not JSON, fall through to the raw body
   }
@@ -167,21 +183,79 @@ function normalizeCitationSegment(raw: unknown): CitationSegment | null {
   return { text: obj.text, source_indices: indices };
 }
 
+// How the backend answers a question - see AskRequest.mode in the
+// backend's app/schemas.py. "auto" sends no mode, letting the backend's
+// classifier route complex questions to council and simple ones to the
+// agent. Research is never chosen automatically.
+export type AskMode = "auto" | "agent" | "council" | "research";
+export type AnsweredMode = Exclude<AskMode, "auto">;
+
+// A flagged sentence from the done event's citation_warnings - from the
+// citation check (council and research mode), or a chart whose values no
+// cited source states (every mode).
+export type CitationWarning = {
+  text: string;
+  source_indices: number[];
+  reason: string;
+};
+
+// Research mode's plan, sent once near the start of the turn.
+export type ResearchPlan = {
+  subQuestions: string[];
+  documents: string[];
+  webQueries: string[];
+};
+
+// Sent as each research stage moves. `done`/`total` count batches of
+// passages while reading; `round` is 0 for plan and write, which happen
+// once, outside the search rounds.
+export type ResearchStage = "plan" | "search" | "read" | "check" | "gaps" | "write";
+export type ResearchProgress = {
+  stage: ResearchStage;
+  round: number;
+  message: string;
+  done?: number;
+  total?: number;
+};
+
+export type AskDone = {
+  sources: AskSource[];
+  conversationId: string | undefined;
+  citations: CitationSegment[];
+  citationWarnings: CitationWarning[];
+  userMessageId: string | undefined;
+  assistantMessageId: string | undefined;
+  // Only set the first time a brand-new conversation completes.
+  title: string | undefined;
+  mode: AnsweredMode | undefined;
+  // Research mode: sub-questions the documents didn't answer.
+  notFound: string[];
+};
+
 export type AskStreamHandlers = {
   onThinking?: (token: string) => void;
   onAnswer?: (token: string) => void;
   onToolCall?: (name: string, args: unknown) => void;
   onToolResult?: (name: string, preview: string) => void;
-  onDone?: (
-    sources: AskSource[],
-    conversationId: string | undefined,
-    citations: CitationSegment[],
-    userMessageId: string | undefined,
-    assistantMessageId: string | undefined,
-    title: string | undefined
-  ) => void;
+  onResearchPlan?: (plan: ResearchPlan) => void;
+  onResearchProgress?: (progress: ResearchProgress) => void;
+  onDone?: (done: AskDone) => void;
   onError?: (message: string) => void;
 };
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+function normalizeWarning(raw: unknown): CitationWarning | null {
+  const segment = normalizeCitationSegment(raw);
+  if (!segment) return null;
+  const reason = (raw as Record<string, unknown>).reason;
+  return { ...segment, reason: typeof reason === "string" ? reason : "" };
+}
+
+const ANSWERED_MODES: AnsweredMode[] = ["agent", "council", "research"];
+const RESEARCH_STAGES: ResearchStage[] = ["plan", "search", "read", "check", "gaps", "write"];
 
 export async function streamAsk(
   question: string,
@@ -202,6 +276,8 @@ export async function streamAsk(
     // persisted with the turn). The backend rejects the request (413) if
     // the combined attached content is over budget.
     attachmentIds?: string[];
+    // Omitted or "auto": the backend picks agent or council per question.
+    mode?: AskMode;
   },
   handlers: AskStreamHandlers,
   signal?: AbortSignal
@@ -223,6 +299,7 @@ export async function streamAsk(
       parent_message_id: options.parentMessageId,
       ...(options.webSearch ? { web_search: true } : {}),
       ...(options.attachmentIds?.length ? { attachment_ids: options.attachmentIds } : {}),
+      ...(options.mode && options.mode !== "auto" ? { mode: options.mode } : {}),
     }),
     signal,
   });
@@ -269,23 +346,52 @@ export async function streamAsk(
           String(payload.preview ?? "")
         );
         break;
+      case "research_plan":
+        handlers.onResearchPlan?.({
+          subQuestions: strings(payload.sub_questions),
+          documents: strings(payload.documents),
+          webQueries: strings(payload.web_queries),
+        });
+        break;
+      case "research_progress":
+        if (RESEARCH_STAGES.includes(payload.stage as ResearchStage)) {
+          handlers.onResearchProgress?.({
+            stage: payload.stage as ResearchStage,
+            round: typeof payload.round === "number" ? payload.round : 0,
+            message: String(payload.message ?? ""),
+            done: typeof payload.done === "number" ? payload.done : undefined,
+            total: typeof payload.total === "number" ? payload.total : undefined,
+          });
+        }
+        break;
       case "done":
-        handlers.onDone?.(
-          Array.isArray(payload.sources)
-            ? payload.sources.map(normalizeSource)
-            : [],
-          typeof payload.conversation_id === "string"
-            ? payload.conversation_id
-            : undefined,
-          Array.isArray(payload.citations)
+        handlers.onDone?.({
+          sources: Array.isArray(payload.sources) ? payload.sources.map(normalizeSource) : [],
+          conversationId: typeof payload.conversation_id === "string" ? payload.conversation_id : undefined,
+          citations: Array.isArray(payload.citations)
             ? payload.citations
                 .map(normalizeCitationSegment)
                 .filter((s): s is CitationSegment => s !== null)
             : [],
-          typeof payload.user_message_id === "string" ? payload.user_message_id : undefined,
-          typeof payload.assistant_message_id === "string" ? payload.assistant_message_id : undefined,
-          typeof payload.title === "string" ? payload.title : undefined
-        );
+          citationWarnings: Array.isArray(payload.citation_warnings)
+            ? payload.citation_warnings
+                .map(normalizeWarning)
+                .filter((w): w is CitationWarning => w !== null)
+            : [],
+          userMessageId: typeof payload.user_message_id === "string" ? payload.user_message_id : undefined,
+          assistantMessageId:
+            typeof payload.assistant_message_id === "string" ? payload.assistant_message_id : undefined,
+          title: typeof payload.title === "string" ? payload.title : undefined,
+          // Older backends only sent `council`.
+          mode: ANSWERED_MODES.includes(payload.mode as AnsweredMode)
+            ? (payload.mode as AnsweredMode)
+            : typeof payload.council === "boolean"
+              ? payload.council
+                ? "council"
+                : "agent"
+              : undefined,
+          notFound: strings(payload.not_found),
+        });
         break;
       case "error":
         handlers.onError?.(
@@ -297,14 +403,107 @@ export async function streamAsk(
   }
 }
 
-export async function listDocuments(): Promise<DocumentEntry[]> {
-  const res = await apiFetch(new URL("/documents", API_BASE));
-  return handleResponse<DocumentEntry[]>(res);
+// One page of GET /documents: the matching documents in filename order
+// from `offset`, and how many match in total (for paging).
+export type DocumentPage = {
+  documents: DocumentEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+// `q` is a case-insensitive filename substring (folders included - the
+// filename is the path); the backend searches and pages, the corpus being
+// thousands of files.
+// The file types Sources can be filtered by (GET /documents' `type`).
+export const DOCUMENT_TYPES = ["pdf", "docx", "pptx", "xlsx", "txt", "md"] as const;
+export type DocumentType = (typeof DOCUMENT_TYPES)[number];
+
+export async function listDocuments(
+  options: { q?: string; limit?: number; offset?: number; folder?: string; type?: DocumentType } = {}
+): Promise<DocumentPage> {
+  const q = options.q?.trim() ?? "";
+  const limit = options.limit ?? 50;
+  const offset = options.offset ?? 0;
+  const url = new URL("/documents", API_BASE);
+  if (q) url.searchParams.set("q", q);
+  if (options.folder) url.searchParams.set("folder", options.folder);
+  if (options.type) url.searchParams.set("type", options.type);
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("offset", String(offset));
+  const body = await handleResponse<DocumentPage | DocumentEntry[]>(await apiFetch(url));
+  if (!Array.isArray(body)) return body;
+  // A backend from before paging (released 13 October 2026) ignores the
+  // parameters and sends every document - search and page it here so the
+  // panel keeps working until that backend is redeployed.
+  const needle = q.toLowerCase();
+  const prefix = options.folder ? `${options.folder.replace(/\/+$/, "")}/` : "";
+  const matches = body.filter(
+    (d) =>
+      (!needle || d.filename.toLowerCase().includes(needle)) &&
+      (!prefix || d.filename.startsWith(prefix)) &&
+      (!options.type || d.filename.toLowerCase().endsWith(`.${options.type}`))
+  );
+  return { documents: matches.slice(offset, offset + limit), total: matches.length, limit, offset };
 }
 
-export async function listConversations(): Promise<ConversationSummary[]> {
-  const res = await apiFetch(new URL("/conversations", API_BASE));
-  return handleResponse<ConversationSummary[]>(res);
+// A folder in the library: filenames are paths, so a folder is a shared
+// prefix. `document_count` counts everything under it, at any depth.
+export type FolderEntry = {
+  name: string;
+  path: string;
+  document_count: number;
+};
+
+// The folders directly inside `parent` (the top level when omitted).
+// Resolves to null on a backend that can't list folders yet, so the page
+// can leave folder browsing out rather than show an error.
+export async function listFolders(parent?: string): Promise<FolderEntry[] | null> {
+  const url = new URL("/documents/folders", API_BASE);
+  if (parent) url.searchParams.set("parent", parent);
+  const res = await apiFetch(url);
+  // Older backends match /documents/folders to DELETE /documents/{filename}
+  // only, so GET answers 405 (or 404).
+  if (res.status === 404 || res.status === 405) return null;
+  return handleResponse<FolderEntry[]>(res);
+}
+
+// One page of GET /conversations, most recently updated first.
+// `nextCursor` fetches the page after it; null on the last page.
+export type ConversationPage = {
+  conversations: ConversationSummary[];
+  nextCursor: string | null;
+};
+
+// `q` keeps conversations whose title or any question contains it.
+export async function listConversations(
+  options: { q?: string; cursor?: string | null; limit?: number } = {}
+): Promise<ConversationPage> {
+  const url = new URL("/conversations", API_BASE);
+  const q = options.q?.trim();
+  if (q) url.searchParams.set("q", q);
+  if (options.cursor) url.searchParams.set("cursor", options.cursor);
+  url.searchParams.set("limit", String(options.limit ?? 50));
+  const body = await handleResponse<
+    { conversations: ConversationSummary[]; next_cursor: string | null } | ConversationSummary[]
+  >(await apiFetch(url));
+  if (!Array.isArray(body)) return { conversations: body.conversations, nextCursor: body.next_cursor };
+  // A backend from before paging (released 13 October 2026) sends every
+  // conversation and ignores the search - filter titles here instead.
+  const needle = q?.toLowerCase();
+  const matches = needle
+    ? body.filter((c) => `${c.title ?? ""} ${c.first_question ?? ""}`.toLowerCase().includes(needle))
+    : body;
+  return { conversations: matches, nextCursor: null };
+}
+
+export async function renameConversation(id: string, title: string): Promise<void> {
+  const res = await apiFetch(new URL(`/conversations/${encodeURIComponent(id)}`, API_BASE), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  await handleResponse<unknown>(res);
 }
 
 export async function getConversation(id: string): Promise<ConversationDetail> {
@@ -319,7 +518,7 @@ export async function deleteConversationApi(id: string): Promise<void> {
   );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(body || `Request failed with status ${res.status}`);
+    throw new Error(errorMessageFrom(body, res.status));
   }
 }
 
@@ -377,7 +576,7 @@ export async function uploadDocumentWithProgress(
         }
       } else {
         if (xhr.status === 401) signInAgain();
-        reject(new Error(xhr.responseText || `Request failed with status ${xhr.status}`));
+        reject(new Error(errorMessageFrom(xhr.responseText, xhr.status)));
       }
     };
 

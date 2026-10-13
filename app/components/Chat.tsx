@@ -14,27 +14,31 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  deleteConversationApi,
   getConversation,
-  listConversations,
   streamAsk,
   uploadAttachment,
   uploadDocumentWithProgress,
+  type AskMode,
   type AskSource,
   type AttachmentInfo,
   type CitationSegment,
-  type ConversationSummary,
 } from "@/lib/api";
 import {
   getActivePath,
   getLatestDescendantLeaf,
   getSiblings,
+  titleFromQuestion,
   type ChatMessage,
 } from "@/lib/conversations";
 import { ACCEPTED_TYPES } from "@/app/components/DocumentPanel";
 import { AnswerChart, ChartSourcesContext } from "@/components/answer-chart";
 import { parseChartSpec } from "@/lib/charts";
+import { focusSource, parseSourceHref, sourceHref } from "@/lib/source-focus";
 import { Sidebar } from "@/app/components/Sidebar";
+import { useConversationHistory } from "@/lib/use-conversation-history";
+import { ANSWERED_LABELS, MODES, ModePicker, loadStoredMode, storeMode } from "@/app/components/ModePicker";
+import { ResearchProgress } from "@/app/components/ResearchProgress";
+import { CitationWarnings, NotFound, SourceList, textWarnings } from "@/app/components/AnswerExtras";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,9 +51,9 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Empty, EmptyTitle } from "@/components/ui/empty";
 import {
   InputGroup,
   InputGroupAddon,
@@ -74,15 +78,18 @@ import {
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
+import { cn } from "cn";
 import {
   ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
+  CircleStopIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
   FileTextIcon,
   FolderOpenIcon,
+  ShieldCheckIcon,
   GlobeIcon,
   Loader2Icon,
   MenuIcon,
@@ -115,11 +122,30 @@ function chartSpecOf(element: unknown) {
 }
 
 const markdownComponents = {
-  a: ({ href, title, children }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a href={href} title={title} target="_blank" rel="noreferrer noopener" className="chat-citation-link">
-      {children}
-    </a>
-  ),
+  a: ({ href, title, children }: AnchorHTMLAttributes<HTMLAnchorElement>) => {
+    // A citation number opens its source in the list under the answer.
+    const target = parseSourceHref(href);
+    if (target) {
+      return (
+        <a
+          href={href}
+          title={title}
+          className="chat-citation-link"
+          onClick={(e) => {
+            e.preventDefault();
+            focusSource(target.messageId, target.index);
+          }}
+        >
+          {children}
+        </a>
+      );
+    }
+    return (
+      <a href={href} title={title} target="_blank" rel="noreferrer noopener" className="chat-citation-link">
+        {children}
+      </a>
+    );
+  },
   pre: ({ children, ...props }: HTMLAttributes<HTMLPreElement>) => {
     const only = Array.isArray(children) && children.length === 1 ? children[0] : children;
     if (chartSpecOf(only)) return <>{children}</>;
@@ -169,6 +195,11 @@ function makeId() {
 function formatArgs(args: unknown): string {
   if (args == null) return "";
   if (typeof args === "string") return args;
+  // Most tools take a search query - show just that rather than JSON.
+  const record = args as Record<string, unknown>;
+  for (const key of ["query", "question", "filename_contains"]) {
+    if (typeof record[key] === "string") return record[key] as string;
+  }
   try {
     return JSON.stringify(args);
   } catch {
@@ -176,52 +207,81 @@ function formatArgs(args: unknown): string {
   }
 }
 
-// `citations` (from the done event) is the structured breakdown — each
-// segment's [N] markers are already stripped, replaced by source_indices
-// (1-based into `sources`). Rebuilds one markdown string: each segment's
-// text gets a real markdown link appended per citation index (title =
-// filename, for a hover tooltip; an index with no matching source, or a
-// source with no document_url, falls back to plain "[N]" text rather than
-// a dead link), then every segment is rejoined with "\n" — an empty
-// segment (a paragraph break marker) naturally reconstructs the original
-// blank line this way, so paragraphs/lists come back exactly as the model
-// wrote them. Only feed this to ReactMarkdown as one combined string, not
-// one call per segment — a lone "* item" line rendered in isolation loses
-// its sibling list items.
-function buildCitedMarkdown(citations: CitationSegment[], sources: AskSource[] | undefined): string {
+// The backend's tool names (see its app/generation.py), as what they did.
+const TOOL_LABELS: Record<string, { call: string; result: string }> = {
+  retrieve: { call: "Searching documents", result: "Found passages" },
+  list_documents: { call: "Listing documents", result: "Listed documents" },
+  describe_image: { call: "Looking at a figure", result: "Described the figure" },
+  web_search: { call: "Searching the web", result: "Found web results" },
+  research: { call: "Researching", result: "Collected notes" },
+};
+
+function toolLabel(name: string, phase: "call" | "result"): string {
+  return TOOL_LABELS[name]?.[phase] ?? name;
+}
+
+// `citations` (from the done event, or saved with the answer) is the
+// structured breakdown - each segment's [N] markers are already stripped,
+// replaced by source_indices (1-based into `sources`). Rebuilds one
+// markdown string: each segment's text gets a link per citation index
+// that opens that source in the list under the answer (title = filename,
+// for a hover tooltip; an index with no matching source falls back to
+// plain "[N]" text), then every segment is rejoined with "\n" - an empty
+// segment (a paragraph break marker) reconstructs the original blank line
+// this way, so paragraphs/lists come back exactly as the model wrote
+// them. Only feed this to ReactMarkdown as one combined string, not one
+// call per segment - a lone "* item" line rendered in isolation loses its
+// sibling list items.
+function buildCitedMarkdown(
+  citations: CitationSegment[],
+  sources: AskSource[] | undefined,
+  messageId: string
+): string {
   return citations
     .map((segment) => {
       if (segment.source_indices.length === 0) return segment.text;
       const links = segment.source_indices
         .map((idx) => {
           const source = sources?.[idx - 1];
-          if (!source?.document_url) return `[${idx}]`;
+          if (!source) return `[${idx}]`;
           const title = (source.filename ?? "").replace(/"/g, "'");
-          return `[[${idx}]](${source.document_url} "${title}")`;
+          return `[[${idx}]](${sourceHref(messageId, idx)} "${title}")`;
         })
         .join("");
-      return `${segment.text} ${links}`;
+      // A no-break space keeps the number on its sentence's last line.
+      return `${segment.text}\u00a0${links}`;
     })
     .join("\n");
 }
 
-// page_number means something different per format: a real page (pdf), a
-// slide (pptx), a sheet order index (xlsx), or a synthetic paragraph/table
-// index (docx, which has no true page concept) — null for txt/md.
-function formatUnit(sourceFormat: string | undefined, pageNumber: number | null | undefined): string {
-  if (pageNumber == null) return "";
-  switch (sourceFormat) {
-    case "pdf":
-      return ` · page ${pageNumber}`;
-    case "pptx":
-      return ` · slide ${pageNumber}`;
-    case "xlsx":
-      return ` · sheet ${pageNumber}`;
-    case "docx":
-      return ` · part ${pageNumber}`;
-    default:
-      return ` · ${pageNumber}`;
-  }
+// "[3]"-style markers as the model writes them. Removed from an answer
+// that has nothing for them to point at - one saved before answers were
+// stored with their sources.
+const CITATION_MARKERS = /\s?\[\d+(?:\s*,\s*\d+)*\]/g;
+
+// Answer text for the clipboard: no citation markers or chart specs,
+// with the sources the answer cites listed underneath.
+function plainAnswer(message: ChatMessage): string {
+  const body = (
+    message.citations && message.citations.length > 0
+      ? message.citations.map((segment) => segment.text).join("\n")
+      : message.content.replace(CITATION_MARKERS, "")
+  )
+    .replace(/```chart[\s\S]*?```\n?/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const cited = [...new Set((message.citations ?? []).flatMap((segment) => segment.source_indices))].sort(
+    (a, b) => a - b
+  );
+  const lines = cited
+    .map((n) => {
+      const source = message.sources?.[n - 1];
+      if (!source?.filename) return null;
+      const unit = source.page_number != null && source.source_type !== "web" ? `, ${source.page_number}` : "";
+      return `[${n}] ${source.filename}${unit}`;
+    })
+    .filter((line): line is string => line !== null);
+  return lines.length > 0 ? `${body}\n\nSources\n${lines.join("\n")}` : body;
 }
 
 export default function Chat() {
@@ -244,7 +304,7 @@ export default function Chat() {
   // completes (see runAsk's onDone) - overrides the client-side
   // titleFromQuestion() guess with the backend's generated title.
   const [serverTitle, setServerTitle] = useState<string | undefined>(undefined);
-  const [history, setHistory] = useState<ConversationSummary[]>([]);
+  const history = useConversationHistory();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -254,11 +314,21 @@ export default function Chat() {
   );
   const [listening, setListening] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  // How the next question is answered (see ModePicker). Children of
+  // AuthProvider only mount on the client, after sign-in, so reading
+  // storage here can't cause a hydration mismatch.
+  const [mode, setMode] = useState<AskMode>(loadStoredMode);
   // Files attached for the *next* message only - cleared once that
   // message is sent. Distinct from "Add files" (attachInputRef below),
   // which ingests into the searchable Sources corpus permanently.
   const [pendingAttachments, setPendingAttachments] = useState<AttachmentInfo[]>([]);
   const [attachingToMessage, setAttachingToMessage] = useState(false);
+  // Files on their way into Sources from the composer's "Add to Sources":
+  // upload percent, then processing once it reaches 100.
+  const [sourceUploads, setSourceUploads] = useState<{ id: string; name: string; progress: number }[]>([]);
+  // Files dragged over the chat attach to the next question when dropped.
+  const [dragActive, setDragActive] = useState(false);
+  const dragDepth = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -273,22 +343,10 @@ export default function Chat() {
     [nodes, activeLeafId]
   );
 
-  // The sidebar's conversation list is fetched from the backend, not
-  // cached locally - it's the source of truth for what conversations
-  // exist and what they're titled, and survives clearing browser storage
-  // or switching devices. Best-effort: a failed fetch just leaves the
-  // sidebar showing whatever it last had rather than surfacing an error.
-  async function refreshHistory() {
-    try {
-      setHistory(await listConversations());
-    } catch {
-      // ignore
-    }
+  function handleModeChange(next: AskMode) {
+    setMode(next);
+    storeMode(next);
   }
-
-  useEffect(() => {
-    refreshHistory();
-  }, []);
 
   // Opens a conversation picked from the Sources page's copy of the
   // sidebar (that page navigates here with ?conversation=<id>, since the
@@ -402,6 +460,7 @@ export default function Chat() {
         role: "assistant",
         content: "",
         toolEvents: [],
+        research: mode === "research" ? { startedAt: now } : undefined,
         createdAt: now,
       },
     }));
@@ -427,6 +486,7 @@ export default function Chat() {
           parentMessageId: parentId ?? "",
           webSearch: webSearchEnabled,
           attachmentIds: attachments.map((a) => a.id),
+          mode,
         },
         {
           onThinking: (token) => {
@@ -456,7 +516,23 @@ export default function Chat() {
               ],
             }));
           },
-          onDone: (sources, nextConversationId, citations, userMessageId, assistantMessageId, title) => {
+          onResearchPlan: (plan) => {
+            updateAssistant((m) => (m.research ? { ...m, research: { ...m.research, plan } } : m));
+          },
+          onResearchProgress: (progress) => {
+            updateAssistant((m) => (m.research ? { ...m, research: { ...m.research, progress } } : m));
+          },
+          onDone: ({
+            sources,
+            conversationId: nextConversationId,
+            citations,
+            citationWarnings,
+            userMessageId,
+            assistantMessageId,
+            title,
+            mode: answeredMode,
+            notFound,
+          }) => {
             // Rekey the temporary local ids to the backend's real message
             // ids, so a later edit/regenerate/branch-switch can reference
             // this turn correctly.
@@ -476,6 +552,13 @@ export default function Chat() {
                   parentId: userMessageId ?? assistantNode.parentId,
                   sources,
                   citations,
+                  citationWarnings,
+                  notFound,
+                  mode: answeredMode,
+                  research: assistantNode.research && {
+                    ...assistantNode.research,
+                    finishedAt: Date.now(),
+                  },
                 };
               }
               return next;
@@ -485,7 +568,7 @@ export default function Chat() {
             if (title) setServerTitle(title);
             // Refresh so the sidebar picks up this turn's new/updated
             // title and recency without waiting for the next mount.
-            refreshHistory();
+            history.refresh();
           },
           onError: (message) => {
             updateAssistant((m) => ({ ...m, role: "error", content: message }));
@@ -494,7 +577,11 @@ export default function Chat() {
         controller.signal
       );
     } catch (err) {
-      if (!controller.signal.aborted) {
+      if (controller.signal.aborted) {
+        // Stopped with the stop button (or by leaving the conversation,
+        // which clears it anyway): keep whatever arrived, and say so.
+        updateAssistant((m) => ({ ...m, stopped: true }));
+      } else {
         updateAssistant((m) => ({
           ...m,
           role: "error",
@@ -502,6 +589,11 @@ export default function Chat() {
         }));
       }
     } finally {
+      // A research turn that stopped early (an error, or the user hit
+      // stop) shouldn't keep its timer running.
+      updateAssistant((m) =>
+        m.research && !m.research.finishedAt ? { ...m, research: { ...m.research, finishedAt: Date.now() } } : m
+      );
       setPending(false);
       abortRef.current = null;
     }
@@ -598,12 +690,19 @@ export default function Chat() {
       const detail = await getConversation(id);
       const nextNodes: Record<string, ChatMessage> = {};
       for (const m of detail.messages) {
+        // Answers saved with what they were built from come back with
+        // the same sources, citations and warnings as when first asked.
         nextNodes[m.id] = {
           id: m.id,
           parentId: m.parent_message_id,
           role: m.role as ChatMessage["role"],
           content: m.content,
           createdAt: Date.parse(m.created_at),
+          mode: m.mode ?? undefined,
+          sources: m.sources ?? undefined,
+          citations: m.citations ?? undefined,
+          citationWarnings: m.citation_warnings ?? undefined,
+          notFound: m.not_found ?? undefined,
         };
       }
       setNodes(nextNodes);
@@ -617,30 +716,19 @@ export default function Chat() {
         type: "error",
       });
       // It may have been deleted elsewhere - drop it from the visible list.
-      refreshHistory();
+      history.refresh();
     }
   }
 
-  async function handleDeleteConversation(id: string, e: React.MouseEvent) {
-    e.stopPropagation();
-    const wasActive = id === conversationId;
-    setHistory((prev) => prev.filter((c) => c.id !== id));
-    if (wasActive) {
-      setNodes({});
-      setActiveLeafId(null);
-      setConversationId(undefined);
-      setServerTitle(undefined);
-    }
-    try {
-      await deleteConversationApi(id);
-    } catch (err) {
-      toast.add({
-        title: "Couldn't delete conversation",
-        description: err instanceof Error ? err.message : undefined,
-        type: "error",
-      });
-      refreshHistory();
-    }
+  // The sidebar has already removed it (useConversationHistory); if it
+  // was the one open, the chat goes back to a blank composer.
+  function handleConversationDeleted(id: string) {
+    if (id !== conversationId) return;
+    abortRef.current?.abort();
+    setNodes({});
+    setActiveLeafId(null);
+    setConversationId(undefined);
+    setServerTitle(undefined);
   }
 
   async function handleCopy(content: string) {
@@ -707,21 +795,30 @@ export default function Chat() {
     setListening(true);
   }
 
-  async function handleAttachFiles(files: FileList) {
+  // Adds files to the shared Sources library from the composer. Each shows
+  // as a chip above the composer while it uploads and then processes
+  // (which can take minutes), and the toast at the end says how it went.
+  async function handleAttachFiles(files: FileList | File[]) {
     const list = Array.from(files);
     if (list.length === 0) return;
+    if (attachInputRef.current) attachInputRef.current.value = "";
 
     let succeeded = 0;
     let firstError: string | null = null;
     for (const file of list) {
+      const id = makeId();
+      setSourceUploads((prev) => [...prev, { id, name: file.name, progress: 0 }]);
       try {
-        await uploadDocumentWithProgress(file);
+        await uploadDocumentWithProgress(file, (progress) =>
+          setSourceUploads((prev) => prev.map((u) => (u.id === id ? { ...u, progress } : u)))
+        );
         succeeded += 1;
       } catch (err) {
         firstError ??= err instanceof Error ? err.message : "Upload failed.";
+      } finally {
+        setSourceUploads((prev) => prev.filter((u) => u.id !== id));
       }
     }
-    if (attachInputRef.current) attachInputRef.current.value = "";
 
     if (succeeded > 0) {
       toast.add({
@@ -746,7 +843,7 @@ export default function Chat() {
   // message only - its text rides along with that one question and the
   // backend discards it afterward. Sequential (not parallel) so a slow
   // upload doesn't race the pendingAttachments state update below.
-  async function handleAttachToMessage(files: FileList) {
+  async function handleAttachToMessage(files: FileList | File[]) {
     const list = Array.from(files);
     if (list.length === 0) return;
     setAttachingToMessage(true);
@@ -772,8 +869,22 @@ export default function Chat() {
 
   const composer = (
     <form onSubmit={handleSubmit} className="w-full">
-      {(pendingAttachments.length > 0 || attachingToMessage) && (
+      {(pendingAttachments.length > 0 || attachingToMessage || sourceUploads.length > 0) && (
         <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {sourceUploads.map((u) => (
+            <span
+              key={u.id}
+              className="flex max-w-64 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs"
+              title={u.name}
+            >
+              <FolderOpenIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">{u.name}</span>
+              <span className="shrink-0 text-muted-foreground tabular-nums">
+                {u.progress < 100 ? `Uploading ${u.progress}%` : "Adding to Sources…"}
+              </span>
+              <Loader2Icon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+            </span>
+          ))}
           {pendingAttachments.map((a) => (
             <AttachmentChip
               key={a.id}
@@ -804,10 +915,10 @@ export default function Chat() {
               handleSubmit(e);
             }
           }}
-          placeholder="Ask a question…"
+          placeholder={mode === "research" ? "Ask a question to research…" : "Ask a question…"}
           aria-label="Question"
           rows={1}
-          className="max-h-40 min-h-10 px-3.5 pt-2.5 text-[15px]"
+          className="max-h-[40dvh] min-h-10 px-3.5 pt-2.5 text-base sm:max-h-48 sm:text-[15px]"
           disabled={pending}
         />
         <InputGroupAddon align="block-end" className="justify-between px-1.5 pb-1.5">
@@ -818,16 +929,35 @@ export default function Chat() {
               >
                 <PlusIcon />
               </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start">
+              <DropdownMenuContent side="top" align="start" className="w-[min(20rem,calc(100vw-2rem))] p-1.5">
                 <DropdownMenuGroup>
-                  <DropdownMenuItem onClick={() => attachToMessageInputRef.current?.click()}>
-                    <PaperclipIcon data-icon="inline-start" />
-                    Attach to this message
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
-                    <FolderOpenIcon data-icon="inline-start" />
-                    Add to Sources
-                  </DropdownMenuItem>
+                  <DropdownMenuLabel className="px-2 pt-1 pb-1.5 text-xs font-medium text-muted-foreground">
+                    Add a file
+                  </DropdownMenuLabel>
+                  {[
+                    {
+                      icon: PaperclipIcon,
+                      label: "Attach to this message",
+                      description: "Read with this question only. It isn't added to Sources.",
+                      onClick: () => attachToMessageInputRef.current?.click(),
+                    },
+                    {
+                      icon: FolderOpenIcon,
+                      label: "Add to Sources",
+                      description: "Searchable in every conversation, for everyone. Takes a few minutes to process.",
+                      onClick: () => attachInputRef.current?.click(),
+                    },
+                  ].map(({ icon: Icon, label, description, onClick }) => (
+                    <DropdownMenuItem key={label} onClick={onClick} className="items-start gap-2.5 py-2">
+                      <Icon className="mt-0.5 text-muted-foreground" />
+                      <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="font-medium">{label}</span>
+                        <span className="text-xs leading-snug whitespace-normal text-muted-foreground">
+                          {description}
+                        </span>
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
                 </DropdownMenuGroup>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -837,11 +967,14 @@ export default function Chat() {
               size="sm"
               onClick={() => setWebSearchEnabled((v) => !v)}
               aria-pressed={webSearchEnabled}
+              aria-label="Search the web"
+              title="Also search the web for this question"
               className="gap-1.5"
             >
               <GlobeIcon data-icon="inline-start" />
               <span className="hidden sm:inline">Search the web</span>
             </InputGroupButton>
+            <ModePicker value={mode} onChange={handleModeChange} disabled={pending} />
           </div>
           <input
             ref={attachInputRef}
@@ -902,8 +1035,12 @@ export default function Chat() {
     </form>
   );
 
+  const ModeIcon = MODES[mode].icon;
+  const conversationTitle =
+    serverTitle ?? (messages.length > 0 ? titleFromQuestion(messages[0].content) : undefined);
+
   return (
-    <div className="bg-page-gradient flex h-screen w-full overflow-hidden">
+    <div className="bg-page-gradient flex h-dvh w-full overflow-hidden">
       {selectionMenu && (
         <div
           className="fixed z-50 -translate-x-1/2 -translate-y-full animate-in fade-in zoom-in-95 pb-2 duration-100"
@@ -928,7 +1065,7 @@ export default function Chat() {
           sourcesActive={false}
           onNewConversation={handleNewConversation}
           onSelectConversation={handleSelectConversation}
-          onDeleteConversation={handleDeleteConversation}
+          onDeleted={handleConversationDeleted}
         />
       </aside>
 
@@ -946,14 +1083,49 @@ export default function Chat() {
             sourcesActive={false}
             onNewConversation={handleNewConversation}
             onSelectConversation={handleSelectConversation}
-            onDeleteConversation={handleDeleteConversation}
+            onDeleted={handleConversationDeleted}
           />
         </SheetContent>
       </Sheet>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 lg:hidden">
-          <div className="flex items-center gap-2">
+      <div
+        className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+        onDragEnter={(e) => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          dragDepth.current += 1;
+          setDragActive(true);
+        }}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+        }}
+        onDragLeave={() => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (dragDepth.current === 0) setDragActive(false);
+        }}
+        onDrop={(e) => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          dragDepth.current = 0;
+          setDragActive(false);
+          if (pending) {
+            toast.add({ title: "Wait for this answer to finish, then drop the file again", type: "error" });
+            return;
+          }
+          handleAttachToMessage(Array.from(e.dataTransfer.files));
+        }}
+      >
+        {dragActive && (
+          <div className="pointer-events-none absolute inset-3 z-40 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-brand bg-[color-mix(in_oklch,var(--background)_88%,var(--brand))] text-center animate-in fade-in duration-150">
+            <PaperclipIcon className="size-6 text-foreground" />
+            <p className="font-heading text-base font-semibold text-foreground">Drop to attach to your next question</p>
+            <p className="max-w-xs text-xs text-muted-foreground">
+              Read with that question only. To add a file for everyone, use Add to Sources.
+            </p>
+          </div>
+        )}
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] lg:hidden">
+          <div className="flex min-w-0 items-center gap-2">
             <Button
               variant="ghost"
               size="icon-sm"
@@ -962,8 +1134,8 @@ export default function Chat() {
             >
               <MenuIcon />
             </Button>
-            <span className="text-sm font-semibold tracking-tight text-foreground">
-              Fayda አንባቢ
+            <span className="min-w-0 truncate text-sm font-semibold tracking-tight text-foreground">
+              {conversationTitle ?? "Fayda አንባቢ"}
             </span>
           </div>
           <Button
@@ -978,13 +1150,21 @@ export default function Chat() {
         </div>
 
         {messages.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-40">
-            <Empty className="border-none p-0">
-              <EmptyTitle className="text-2xl font-semibold">
-                What should አንባቢ read for you?
-              </EmptyTitle>
-            </Empty>
-            <div className="w-full max-w-2xl">{composer}</div>
+          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 pt-8 pb-[max(2rem,env(safe-area-inset-bottom))] sm:pb-[18vh]">
+            <div className="flex w-full max-w-2xl flex-col gap-5 animate-in fade-in duration-300">
+              <div className="px-1">
+                <h1 className="font-heading text-[clamp(1.5rem,4.2vw,2.125rem)] leading-tight font-bold tracking-[-0.02em] text-balance text-foreground">
+                  What should አንባቢ read for you?
+                </h1>
+              </div>
+              {composer}
+              <p className="flex items-start gap-1.5 px-1 text-xs text-muted-foreground" aria-live="polite">
+                <ModeIcon className="mt-px size-3.5 shrink-0" />
+                <span>
+                  <span className="font-medium text-foreground">{MODES[mode].label}:</span> {MODES[mode].description}
+                </span>
+              </p>
+            </div>
           </div>
         ) : (
           <>
@@ -993,18 +1173,21 @@ export default function Chat() {
                 <MessageScrollerViewport onScroll={() => setSelectionMenu(null)}>
                   <MessageScrollerContent
                     ref={transcriptRef}
-                    className="mx-auto w-full max-w-2xl px-4 py-6"
+                    className="mx-auto w-full max-w-2xl gap-0 px-3 py-6 sm:px-4"
                   >
                     {messages.map((message) => (
                       <MessageScrollerItem
                         key={message.id}
                         messageId={message.id}
                         scrollAnchor={message.role === "user"}
-                        className={
+                        className={cn(
+                          // A question sits close to its answer; turns are
+                          // spaced apart from each other.
+                          message.role === "user" ? "pt-8 first:pt-0" : "pt-1",
                           removingIds.has(message.id)
                             ? "animate-out fade-out slide-out-to-top-1 duration-180 fill-mode-forwards ease-in"
                             : "animate-in fade-in slide-in-from-bottom-1 duration-200 ease-out fill-mode-both"
-                        }
+                        )}
                       >
                         <ChatMessageRow
                           message={message}
@@ -1028,7 +1211,7 @@ export default function Chat() {
                 <MessageScrollerButton />
               </MessageScroller>
             </MessageScrollerProvider>
-            <div className="shrink-0 animate-in fade-in px-4 pt-2 pb-6 duration-300">
+            <div className="shrink-0 animate-in fade-in px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] duration-300 sm:px-4 sm:pb-5">
               <div className="mx-auto w-full max-w-2xl">{composer}</div>
             </div>
           </>
@@ -1240,7 +1423,7 @@ function ChatMessageRow({
           </Bubble>
           <MessageFooter className="justify-end gap-1">
             <BranchSwitcher siblings={siblings} activeId={message.id} pending={pending} onSwitch={onSwitchBranch} />
-            <div className="flex translate-y-0.5 gap-0.5 opacity-0 transition-[opacity,transform] duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover/message:translate-y-0 group-hover/message:opacity-100">
+            <div className="flex translate-y-0.5 gap-0.5 opacity-0 transition-[opacity,transform] duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover/message:translate-y-0 group-hover/message:opacity-100 touch:translate-y-0 touch:opacity-100">
               <CopyButton content={message.content} onCopy={onCopy} label="Copy question" />
               <Button
                 variant="ghost"
@@ -1297,11 +1480,24 @@ function ChatMessageRow({
   return (
     <Message>
       <MessageContent>
-        {message.toolEvents && message.toolEvents.length > 0 && (
+        {message.research && (
+          <ResearchProgress
+            plan={message.research.plan}
+            progress={message.research.progress}
+            startedAt={message.research.startedAt}
+            finishedAt={message.research.finishedAt}
+            answering={Boolean(message.content) || message.research.finishedAt !== undefined}
+            stopped={message.stopped}
+          />
+        )}
+
+        {!message.research && message.toolEvents && message.toolEvents.length > 0 && (
           <Collapsible defaultOpen={toolsDefaultOpen}>
             <CollapsibleTrigger className="group/trigger flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground">
               <ChevronDownIcon className="size-3.5 transition-transform group-aria-expanded/trigger:rotate-180" />
-              Lookups ({message.toolEvents.length})
+              {isStreaming
+                ? toolLabel(message.toolEvents[message.toolEvents.length - 1].name, message.toolEvents[message.toolEvents.length - 1].phase) + "…"
+                : `Steps (${message.toolEvents.filter((ev) => ev.phase === "call").length})`}
             </CollapsibleTrigger>
             <CollapsibleContent className="mt-1.5 flex flex-col gap-1">
               {message.toolEvents.map((ev) => (
@@ -1309,10 +1505,7 @@ function ChatMessageRow({
                   key={ev.id}
                   className="flex items-baseline gap-2 rounded-md border border-border bg-muted/50 px-2 py-1 text-xs"
                 >
-                  <span className="shrink-0 text-muted-foreground">
-                    {ev.phase === "call" ? "→" : "←"}
-                  </span>
-                  <span className="shrink-0 font-medium">{ev.name}</span>
+                  <span className="shrink-0 font-medium">{toolLabel(ev.name, ev.phase)}</span>
                   {ev.detail && (
                     <span className="min-w-0 truncate text-muted-foreground">
                       {ev.detail}
@@ -1336,7 +1529,16 @@ function ChatMessageRow({
           </Collapsible>
         )}
 
-        {isStreaming ? (
+        {message.stopped && !message.content ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <CircleStopIcon className="size-4" />
+            Stopped before an answer arrived.
+            <Button variant="outline" size="xs" onClick={() => onRegenerate(message.id)} disabled={pending}>
+              <RotateCcwIcon data-icon="inline-start" />
+              Try again
+            </Button>
+          </div>
+        ) : isStreaming && message.research ? null : isStreaming ? (
           <Marker role="status">
             <MarkerContent className="shimmer font-medium">Thinking…</MarkerContent>
           </Marker>
@@ -1344,20 +1546,20 @@ function ChatMessageRow({
           <Bubble variant="ghost">
             <BubbleContent>
               <div className="chat-markdown" data-answer-text>
-                <ChartSourcesContext.Provider value={message.sources}>
+                <ChartSourcesContext.Provider value={{ sources: message.sources, messageId: message.id }}>
                 {message.citations && message.citations.length > 0 ? (
                   // Answer is complete: render the clean, structured
                   // citation breakdown rather than the raw streamed text
                   // (which may still contain literal "[N]" markers as the
                   // model generated them).
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                    {buildCitedMarkdown(message.citations, message.sources)}
+                    {buildCitedMarkdown(message.citations, message.sources, message.id)}
                   </ReactMarkdown>
                 ) : (
                   // Still streaming, or the answer had no citations —
                   // render the raw text as-is.
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                    {message.content}
+                    {pending || message.sources?.length ? message.content : message.content.replace(CITATION_MARKERS, "")}
                   </ReactMarkdown>
                 )}
                 </ChartSourcesContext.Provider>
@@ -1366,65 +1568,58 @@ function ChatMessageRow({
           </Bubble>
         )}
 
+        {!pending && message.notFound && <NotFound questions={message.notFound} />}
+
+        {!pending && <CitationWarnings warnings={textWarnings(message.citationWarnings)} />}
+
         {!isStreaming && message.content && (
-          <MessageFooter className="translate-y-0.5 opacity-0 transition-[opacity,transform] duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover/message:translate-y-0 group-hover/message:opacity-100">
-            <CopyButton content={message.content} onCopy={onCopy} label="Copy answer" />
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => onRegenerate(message.id)}
-              disabled={pending}
-              aria-label="Regenerate answer"
-              title="Regenerate answer"
-            >
-              <RotateCcwIcon />
-            </Button>
+          <MessageFooter className="flex-wrap gap-x-2 gap-y-1">
+            {message.stopped && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                <CircleStopIcon className="size-3.5" />
+                Stopped early
+              </span>
+            )}
+            {message.mode && (
+              <AnswerMeta mode={message.mode} warningCount={textWarnings(message.citationWarnings).length} />
+            )}
+            <div className="flex translate-y-0.5 gap-0.5 opacity-0 transition-[opacity,transform] duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover/message:translate-y-0 group-hover/message:opacity-100 touch:translate-y-0 touch:opacity-100">
+              <CopyButton content={plainAnswer(message)} onCopy={onCopy} label="Copy answer" />
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => onRegenerate(message.id)}
+                disabled={pending}
+                aria-label="Regenerate answer"
+                title="Regenerate answer"
+              >
+                <RotateCcwIcon />
+              </Button>
+            </div>
           </MessageFooter>
         )}
 
         {message.sources && message.sources.length > 0 && (
-          <Collapsible>
-            <CollapsibleTrigger className="group/trigger flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground">
-              <ChevronDownIcon className="size-3.5 transition-transform group-aria-expanded/trigger:rotate-180" />
-              Sources ({message.sources.length})
-            </CollapsibleTrigger>
-            <CollapsibleContent className="mt-1.5 flex flex-col gap-1">
-              {message.sources.map((source, i) => {
-                const label = source.filename ?? source.content ?? "source";
-                const page = formatUnit(source.source_format, source.page_number);
-                const body = (
-                  <>
-                    {label}
-                    {page}
-                  </>
-                );
-                return (
-                  <div key={`${message.id}-${i}`} className="flex items-baseline gap-2 text-xs">
-                    <span
-                      className="w-4 shrink-0 text-right font-medium"
-                      style={{ color: "var(--color-grounded-fg)" }}
-                    >
-                      {i + 1}
-                    </span>
-                    {source.document_url ? (
-                      <a
-                        href={source.document_url}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="min-w-0 truncate text-muted-foreground hover:text-foreground hover:underline"
-                      >
-                        {body}
-                      </a>
-                    ) : (
-                      <span className="min-w-0 truncate text-muted-foreground">{body}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </CollapsibleContent>
-          </Collapsible>
+          <SourceList sources={message.sources} messageId={message.id} />
         )}
       </MessageContent>
     </Message>
+  );
+}
+
+// Which mode answered this turn (the done event's `mode`), and for the
+// modes that check citations, whether every cited sentence held up.
+function AnswerMeta({ mode, warningCount }: { mode: NonNullable<ChatMessage["mode"]>; warningCount: number }) {
+  const checked = mode !== "agent" && warningCount === 0;
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className="font-medium">{ANSWERED_LABELS[mode]}</span>
+      {checked && (
+        <span className="flex items-center gap-1" style={{ color: "var(--color-grounded-fg)" }}>
+          <ShieldCheckIcon className="size-3.5" />
+          Citations checked
+        </span>
+      )}
+    </span>
   );
 }

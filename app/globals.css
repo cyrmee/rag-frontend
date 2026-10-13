@@ -3,6 +3,9 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
+/* Touch screens have no hover, so controls revealed on hover stay
+   visible there instead of being unreachable. */
+@custom-variant touch (@media (hover: none));
 
 :root {
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
@@ -214,6 +217,13 @@ body {
 
   --sidebar-bg-stop-0: #031019;
   --sidebar-bg-stop-100: #003f5f;
+
+  --color-grounded-bg: color-mix(in oklch, var(--fayda-emerald) 12%, var(--card));
+  --color-grounded-border: color-mix(in oklch, var(--fayda-emerald) 35%, var(--card));
+  --color-grounded-fg: color-mix(in oklch, var(--fayda-emerald) 85%, white);
+  --color-pending-bg: color-mix(in oklch, var(--fayda-gold) 10%, var(--card));
+  --color-pending-border: color-mix(in oklch, var(--fayda-gold) 35%, var(--card));
+  --color-pending-fg: color-mix(in oklch, var(--fayda-gold) 85%, white);
 }
 
 @layer base {
@@ -652,4 +662,55 @@ body {
 .answer-chart-plot .recharts-surface:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+
+/* ---------- Research log (app/components/ResearchProgress.tsx) ----------
+   A rail joins the stage nodes; done stages take the primary blue, the
+   active one the Fayda gold, pending ones stay as outlines. */
+.research-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 7.5px;
+  top: 18px;
+  bottom: -12px;
+  width: 1px;
+  background: var(--border);
+}
+
+.research-step[data-state="done"]:not(:last-child)::before {
+  background: color-mix(in oklch, var(--primary) 45%, transparent);
+}
+
+.research-node {
+  border-color: var(--border);
+  background: var(--card);
+}
+
+.research-step[data-state="done"] .research-node {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.research-step[data-state="active"] .research-node {
+  border-color: var(--brand-interactive);
+  background: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 28%, transparent);
+  animation: research-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes research-pulse {
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in oklch, var(--brand) 12%, transparent);
+  }
+}
+
+.research-segment {
+  background: var(--muted);
+  transition: background-color 300ms ease-out;
+}
+
+.research-segment[data-filled="true"],
+.research-fill {
+  background: var(--brand-interactive);
 }

@@ -1,65 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import DocumentPanel from "@/app/components/DocumentPanel";
 import { Sidebar } from "@/app/components/Sidebar";
-import { deleteConversationApi, listConversations, type ConversationSummary } from "@/lib/api";
+import { useConversationHistory } from "@/lib/use-conversation-history";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { toast } from "@/components/ui/toast";
 import { MenuIcon } from "lucide-react";
 
 export default function SourcesPage() {
   const router = useRouter();
-  const [history, setHistory] = useState<ConversationSummary[]>([]);
+  const history = useConversationHistory();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-
-  useEffect(() => {
-    listConversations()
-      .then(setHistory)
-      .catch(() => {
-        // best-effort; the sidebar just shows an empty Recent list
-      });
-  }, []);
 
   // The chat UI only exists on / - both of these leave this page for
   // there, either to a blank composer or with ?conversation= set so the
   // chat page's mount effect knows which one to open (see Chat.tsx).
-  function handleNewConversation() {
-    router.push("/");
-  }
-
-  function handleSelectConversation(id: string) {
-    router.push(`/?conversation=${id}`);
-  }
-
-  async function handleDeleteConversation(id: string, e: React.MouseEvent) {
-    e.stopPropagation();
-    setHistory((prev) => prev.filter((c) => c.id !== id));
-    try {
-      await deleteConversationApi(id);
-    } catch (err) {
-      toast.add({
-        title: "Couldn't delete conversation",
-        description: err instanceof Error ? err.message : undefined,
-        type: "error",
-      });
-      listConversations().then(setHistory).catch(() => {});
-    }
-  }
-
   const sidebarProps = {
     history,
     activeConversationId: undefined,
     sourcesActive: true,
-    onNewConversation: handleNewConversation,
-    onSelectConversation: handleSelectConversation,
-    onDeleteConversation: handleDeleteConversation,
+    onNewConversation: () => router.push("/"),
+    onSelectConversation: (id: string) => router.push(`/?conversation=${id}`),
   };
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background">
+    <div className="bg-page-gradient flex h-dvh w-full overflow-hidden">
       <aside className="hidden w-72 shrink-0 border-r border-sidebar-border lg:flex">
         <Sidebar {...sidebarProps} />
       </aside>
@@ -77,7 +44,7 @@ export default function SourcesPage() {
       </Sheet>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] lg:hidden">
           <Button
             variant="ghost"
             size="icon-sm"
