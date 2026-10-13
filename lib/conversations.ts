@@ -20,10 +20,10 @@ export type ToolEvent = {
 // the backend's message id once a turn completes (a temporary local id
 // while it's still in flight - see Chat.tsx's runAsk). `parentId` is null
 // for a message at the conversation's root. The backend is the only
-// source of truth for a conversation's messages (GET /conversations/{id})
-// - sources/citations/thinking/toolEvents are ephemeral, per-turn UI
-// extras that only exist for the turn just streamed in this session, not
-// persisted server-side or restored when reopening a past conversation.
+// source of truth for a conversation's messages (GET /conversations/{id}).
+// Since 13 October 2026 it keeps each answer's sources, citations,
+// warnings and thinking too, so they come back on reopen; toolEvents and
+// attachments are still per-turn UI extras for the turn just streamed.
 export type ChatMessage = {
   id: string;
   parentId: string | null;

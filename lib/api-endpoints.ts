@@ -47,7 +47,7 @@ export const apiEndpoints: ApiEndpoint[] = [
     method: "GET",
     path: "/conversations/{conversation_id}",
     summary: "Every message in every branch of one conversation.",
-    response: "{ id, title, active_message_id, messages: [{ id, parent_message_id, role, content, created_at }] }",
+    response: "{ id, title, active_message_id, messages: [{ id, parent_message_id, role, content, created_at, mode, sources, citations, citation_warnings, not_found, thinking }] } - the answer fields are what its done event carried, null for questions and for answers saved before 13 October 2026",
   },
   {
     method: "DELETE",

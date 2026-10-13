@@ -691,7 +691,8 @@ export default function Chat() {
       const nextNodes: Record<string, ChatMessage> = {};
       for (const m of detail.messages) {
         // Answers saved with what they were built from come back with
-        // the same sources, citations and warnings as when first asked.
+        // the same sources, citations, warnings and reasoning as when
+        // first asked.
         nextNodes[m.id] = {
           id: m.id,
           parentId: m.parent_message_id,
@@ -703,6 +704,7 @@ export default function Chat() {
           citations: m.citations ?? undefined,
           citationWarnings: m.citation_warnings ?? undefined,
           notFound: m.not_found ?? undefined,
+          thinking: m.thinking ?? undefined,
         };
       }
       setNodes(nextNodes);

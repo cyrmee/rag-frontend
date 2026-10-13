@@ -60,6 +60,8 @@ export type ConversationMessageNode = {
   citations?: CitationSegment[] | null;
   citation_warnings?: CitationWarning[] | null;
   not_found?: string[] | null;
+  // The model's reasoning on the way to the answer, as it streamed.
+  thinking?: string | null;
 };
 
 export type ConversationDetail = {
